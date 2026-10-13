@@ -417,4 +417,8 @@ wire();
 window.PC3D = {
   show() { init(); resize(); fillItems(); renderCM(); },
   onMeasureChange() { fillItems(); },
+  loadMesh(pos, idx, name) { // positions in mm (Z up) from the multi-view tool
+    const g = new THREE.BufferGeometry(); g.setAttribute("position", new THREE.Float32BufferAttribute(pos, 3)); g.setIndex(idx); g.rotateX(-Math.PI / 2); g.computeVertexNormals();
+    setModel(new THREE.Mesh(g, new THREE.MeshStandardMaterial({ color: 0xd8a0b0, side: THREE.DoubleSide })), name || "จากเงาหลายมุม"); unitScale = 1; pendingScale = 0; report();
+  },
 };

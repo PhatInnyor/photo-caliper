@@ -198,7 +198,7 @@ canvas.chart{width:100%;height:auto;aspect-ratio:16/10;display:block}
       <div class="panel">
         <div class="row">
           <span class="btn filebtn">เปิดโมเดล 3D<input type="file" id="m3File" accept=".ply,.obj,.stl,.glb,.gltf,.splat"></span>
-          <button class="btn" id="m3FromItem">สร้างจากการวัดวัตถุ 3 มิติ</button>
+          <select id="m3FromItem" style="max-width:220px"></select>
           <button class="btn pri" id="m3AR" hidden>เริ่ม AR วัดจริง</button>
         </div>
         <div class="stage3d" id="stage3d" style="margin-top:10px"></div>
@@ -206,6 +206,36 @@ canvas.chart{width:100%;height:auto;aspect-ratio:16/10;display:block}
       </div>
     </div>
     <div class="col">
+      <div class="panel" id="hvPanel">
+        <h2>วัดจากเงาหลายมุม <small>วางวัตถุบน A4 ที่ขีดตาราง · ถ่ายรอบ 8–12 ภาพ · ประมวลผลในเครื่องทั้งหมด</small></h2>
+        <div class="row">
+          <span class="btn filebtn pri">เลือกภาพ<input type="file" id="hvFiles" accept="image/*" multiple></span>
+          <button class="btn" id="hvRun">คำนวณ</button>
+          <button class="chip" id="hvClear">ล้าง</button>
+        </div>
+        <div class="fgrid" style="margin-top:8px">
+          <label class="f">ท่าวาง<select id="hvMode"><option value="lie">นอนบนกระดาษ</option><option value="stand">ตั้งบนฐาน</option></select></label>
+          <label class="f">กว้างกระดาษจริง (มม.)<input type="number" id="hvPW" step="0.1" value="210"></label>
+          <label class="f">ยาวกระดาษจริง (มม.)<input type="number" id="hvPH" step="0.1" value="297"></label>
+          <label class="f">ระยะห่างตาราง (มม.)<input type="number" id="hvSP" step="0.1" value="30"></label>
+          <label class="f">ขอบถึงเส้นแรก (มม.)<input type="number" id="hvMG" step="0.1" value="15"></label>
+          <label class="f">ความไวแยกวัตถุ <span id="hvTolV">18</span><input type="range" id="hvTol" min="6" max="60" value="18"></label>
+        </div>
+        <label class="row" style="margin-top:6px;gap:6px"><input type="checkbox" id="hvAllow"> ยอมให้เงาพลาดได้ 1 ภาพ (ใช้เมื่อมีภาพที่แยกวัตถุไม่ดี · ค่าจะเกินจริงขึ้นเล็กน้อย)</label>
+        <p class="muted" id="hvStatus" style="margin:8px 0">มุมซ้ายบนของกระดาษต้องมีสี่เหลี่ยมทึบ · เห็นกระดาษครบ 4 มุมทุกภาพ · พื้นหลังสีเข้ม · แตะภาพย่อเพื่อไม่ใช้ภาพนั้น</p>
+        <div class="thumbs" id="hvThumbs"></div>
+        <div id="hvOut" style="margin-top:10px"></div>
+        <canvas id="hvChart" width="900" height="380" style="width:100%;margin-top:8px" hidden></canvas>
+        <div id="hvMore" hidden>
+          <div class="fgrid" style="margin-top:8px">
+            <label class="f">ตำแหน่งแบ่งส่วน (มม. จากปลาย, คั่นด้วย ,)<input type="text" id="hvSplits"></label>
+            <label class="f">น้ำหนักที่ชั่งได้ (g) — ไม่บังคับ<input type="number" id="hvWeight" step="0.1"></label>
+            <label class="f">ความหนาแน่นวัสดุ (g/cm³)<input type="number" id="hvDens" step="0.01" value="1.15"></label>
+          </div>
+          <div id="hvSeg" style="margin-top:8px"></div>
+          <div class="row" style="margin-top:8px"><button class="btn" id="hvSTL">ส่งออก STL (มม.)</button><button class="btn" id="hv3D">เปิดในตัวดู 3D</button><button class="btn" id="hvCSV">คัดลอกโปรไฟล์ CSV</button></div>
+        </div>
+      </div>
       <div class="panel">
         <h2>วัดในสามมิติ</h2>
         <div class="row">
@@ -366,6 +396,8 @@ canvas.chart{width:100%;height:auto;aspect-ratio:16/10;display:block}
 </div>
 
 <script src="app.js"></script>
+<script src="hull.js"></script>
+<script src="hull-ui.js"></script>
 <script type="module" src="mode3d.js"></script>
 </body>
 </html>

@@ -701,6 +701,7 @@ function evalObj(it, im, md) {
 function taskHtml(t) {
   if (!t) return curImg() ? "เลือกเครื่องมือวัด หรือแตะภาพเพื่อเปิดเต็มจอแล้วลากจุดปรับ" : "ถ่ายภาพหรือเลือกภาพที่มีมาตราวัดอยู่ใกล้วัตถุ";
   if (t.type === "ref") { const d = refDef(), n = t.img.refPts.length; return `<b>มาตราวัด</b> · ${d.auto}${n ? ` (วางแล้ว ${n} จุด ลากปรับได้)` : ""}`; }
+  if (t.type === "item" && (t.item.tool === "obj" || t.item.tool === "area")) { const it = t.item, T = TOOLS[it.tool]; const m = S.msg ? `<div class="warn">${esc(S.msg)}</div>` : ""; S.msg = null; const sam = LIB.sam.state === "ok" ? "" : `<div class="warn">SAM ${({ off: "ปิดอยู่", loading: "กำลังโหลด (~40 MB ครั้งแรก)", fail: "โหลดไม่ได้" })[LIB.sam.state]} — ใช้ตัวแยกแบบสี/ขอบ ซึ่งลามง่ายกับวัตถุใสหรือสีใกล้พื้นหลัง ${LIB.sam.state !== "loading" ? '<button class="chip" onclick="PC.retrySAM()">ลองโหลด SAM ใหม่</button>' : ""}</div>`; return (t.side ? `<b>#${it.id} ภาพด้านข้าง</b> · แตะที่วัตถุเดียวกันในภาพนี้` : `<b>#${it.id} ${T.n}</b> · ${T.hint}`) + m + sam; }
   if (t.type === "item") { const it = t.item, T = TOOLS[it.tool]; return it.tool === "obj" && t.side ? `<b>#${it.id} ภาพด้านข้าง</b> · แตะที่วัตถุเดียวกันในภาพนี้` : `<b>#${it.id} ${T.n}</b> · ${T.hint}`; }
   if (t.type === "dolly") return `<b>#${t.item.id} ถอยกล้อง (ภาพที่ 2)</b> · ${t.item.tool === "obj" ? "แตะที่วัตถุเดียวกัน" : "แตะปลายทั้งสองของสิ่งเดียวกัน"} ในภาพนี้`;
   if (t.type === "contact") return `<b>#${t.item.id} จุดแตะพื้น</b> · แตะจุดที่วัตถุแตะพื้นหรือโต๊ะ (เช่น ขอบล่างของก้นขวดที่หันเข้ากล้อง)`;
@@ -715,7 +716,14 @@ function setTask(t) {
 async function runSeg(it, side) {
   const tgt = side ? it.side : it; const im = imgById(tgt.imgId); if (!im || !tgt.seeds.length) return;
   setBusy(LIB.sam.state === "ok" ? "SAM กำลังแยกวัตถุ…" : "กำลังแยกวัตถุ…"); await new Promise(r => setTimeout(r, 20));
-  tgt.seg = await segment(im, tgt.seeds, tgt.neg || [], tgt.tol, "best"); tgt.overlay = null; setBusy(null);
+  const prevArea = tgt.seg && !tgt.leak ? tgt.seg.area : 0;
+  const leaks = g => !g || g.touches || g.area > .6 * im.W * im.H;
+  let tol = tgt.tol, seg = await segment(im, tgt.seeds, tgt.neg || [], tol, "best");
+  while (leaks(seg) && seg && seg.engine !== "SAM" && tol > 6) { tol = Math.max(6, tol * .7); seg = await segment(im, tgt.seeds, tgt.neg || [], tol, "best"); }
+  if (!leaks(seg) && tol !== tgt.tol) { tgt.tol = Math.round(tol); S.msg = `ลดความไวเหลือ ${tgt.tol} อัตโนมัติ เพราะบริเวณลามถึงขอบภาพ`; }
+  if (prevArea && tgt.seeds.length > 1 && seg && seg.area > 2 * prevArea) { tgt.seeds.pop(); setBusy(null); S.msg = "จุดที่แตะเพิ่มทำให้บริเวณใหญ่ขึ้นเกิน 2 เท่า จึงไม่ใช้จุดนั้น (ถ้าตั้งใจ ให้เพิ่มความไวแล้วแตะใหม่)"; setTask(S.task); renderAll(); return; }
+  tgt.leak = leaks(seg); tgt.seg = tgt.leak ? null : seg; tgt.overlay = null; setBusy(null);
+  if (tgt.leak) { tgt.pr = null; if (it.tool === "area") it.contour = null; if (!side) it.fit = null; S.msg = "บริเวณลามถึงขอบภาพหรือใหญ่เกินจริง จึงไม่แสดงค่า · แตะจุดลบ (−) บนพื้นหลัง ลดความไว หรือใช้ [Manual] หลายเหลี่ยม" + (LIB.sam.state !== "ok" ? " · SAM ยังไม่พร้อม" : ""); setTask(S.task); renderAll(); return; }
   if (it.tool === "area") { const c = traceContour(im, tgt.seg.mask); it.contour = c.filter((_, i) => i % 2 === 0); renderAll(); return; }
   tgt.pr = profileOf(im, tgt.seg.mask);
   if (!side) { it.fit = tgt.pr ? fitShapes(tgt.pr) : null; it.ell = it.fit && it.fit.round ? ellipseFromMask(im, tgt.seg.mask) : null; }
@@ -893,11 +901,11 @@ function draw() {
     if (isDolly) { if (dl.seg) vx.drawImage(overlay(im, dl.seg.mask, "--acc", "overlay", dl), 0, 0); (dl.seeds || []).forEach(p => dot(p, acc, 3)); (dl.pts || []).forEach(p => dot(p, acc)); if (dl.pts && dl.pts.length > 1) path(dl.pts, acc, false); continue; }
     if (it.imgId !== im.id && !isSide) continue;
     if (it.tool === "obj" || it.tool === "area") {
-      const tgt = isSide ? it.side : it; (tgt.neg || []).forEach(p => dot(p, bad, 3)); if (!tgt.seg) { (tgt.seeds || []).forEach(p => dot(p, acc)); continue; }
+      const tgt = isSide ? it.side : it, act = S.task && S.task.item === it; if (act) (tgt.neg || []).forEach(p => dot(p, bad, 3)); if (!tgt.seg) { if (act || tgt.leak) (tgt.seeds || []).forEach(p => dot(p, tgt.leak ? bad : acc)); continue; }
       vx.drawImage(overlay(im, tgt.seg.mask, "--acc", "overlay", tgt), 0, 0);
       if (it.tool === "area") { if (it.contour) path(it.contour, acc, true, 1.6); const v = it.res && it.res.vals[0], v2 = it.res && it.res.vals[2]; if (tgt.seeds[0]) label(tgt.seeds[0], `#${it.id}${v ? " " + fmt(v.v, 1) + " " + v.u : ""}${v2 ? " · ยาว " + fmt(v2.v, 1) + " มม." : ""}`, acc); }
       const pr = tgt.pr; if (pr) { const a = { x: pr.cx + pr.u.x * pr.tmin, y: pr.cy + pr.u.y * pr.tmin }, b = { x: pr.cx + pr.u.x * (pr.tmin + pr.L), y: pr.cy + pr.u.y * (pr.tmin + pr.L) }; vx.setLineDash([8 * u, 6 * u]); path([a, b], acc, false, 2); vx.setLineDash([]); if (!isSide && it.ell) { vx.strokeStyle = amb; vx.lineWidth = 1.5 * u; vx.beginPath(); vx.ellipse(it.ell.cx, it.ell.cy, it.ell.a, it.ell.b, it.ell.ang, 0, 7); vx.stroke(); } const v0 = it.res && it.res.vals[0]; label(a, `#${it.id}${isSide ? " ข้าง" : ""}${v0 ? " " + fmt(v0.v, 1) + " มม." : ""}`, acc); }
-      (tgt.seeds || []).forEach(p => dot(p, acc, 3)); continue;
+      if (act) (tgt.seeds || []).forEach(p => dot(p, acc, 3)); continue;
     }
     const P = it.pts, c = acc;
     if (it.tool === "curve") { if (it.path) path(it.path, c, false, 2); } else if (it.tool === "box" && P.length > 1) { for (let i = 1; i < P.length; i++) path([P[0], P[i]], c, false); } else path(P, c, false);
@@ -1128,6 +1136,7 @@ document.querySelectorAll(".tab").forEach(b => b.onclick = () => {
 /* ======================= API for mode3d.js ======================= */
 window.PC = {
   S, SET, saveSet, fmt, esc, mean, sdOf, rn, hyp, download, makeImg, autoNail, autoRef, refDef, refSize, imgModel, lensInfo, sharpness, TOOLS, SHAPE_N, LIB,
+  retrySAM() { SET.libs.sam = true; saveSet(); LIB.sam.state = "off"; loadSAM().then(() => { setTask(S.task); renderAll(); }); setTask(S.task); },
   setARDelta(itemId, d, sd) { const it = S.items.find(i => i.id == itemId); if (!it) return false; it.dsrc = it.dsrc || {}; it.dsrc.ar = { d, sd }; it.dOpen = true; renderAll(); return true; },
   objItems() { return S.items.filter(i => i.tool === "obj" && i.res && i.res.profile); }, renderAll
 };
