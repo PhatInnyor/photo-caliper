@@ -134,7 +134,7 @@ ul.loss li span{color:var(--muted);font-size:13px}
             <label class="f" id="lS">± (มม.)<input type="number" id="refS" step="0.01"></label>
           </div>
           <p class="muted" id="refHint" style="margin:8px 0"></p>
-          <div class="row"><button class="btn" id="refPlace">วางจุดมาตราวัดในภาพนี้</button><button class="btn" id="refClear">ล้างจุด</button><button class="chip" id="gyroPlane" aria-pressed="false" hidden>วัตถุวางบนพื้นราบ (ใช้ไจโร)</button></div>
+          <div class="row"><button class="btn pri" id="refAuto">หามาตราวัดอัตโนมัติ</button><button class="btn" id="refPlace">วางใหม่</button><button class="chip" id="gyroPlane" aria-pressed="false" hidden>วัตถุวางบนพื้นราบ (ใช้ไจโร)</button></div>
         </div>
         <div class="viewer" id="viewer" style="margin-top:10px"><canvas id="cv"></canvas></div>
         <div class="task" id="task" style="margin-top:10px"></div>
@@ -145,6 +145,7 @@ ul.loss li span{color:var(--muted);font-size:13px}
             <button class="chip" id="snap" aria-pressed="true">ดูดเข้ามุม</button>
             <button class="chip" id="undo">ลบจุดล่าสุด</button>
             <button class="chip" id="done" hidden>จบเส้น</button>
+            <button class="chip" id="neg" aria-pressed="false" hidden>จุดลบ (ตัดส่วนเกิน)</button>
           </div>
           <div class="row">
             <button class="chip" id="zOut" aria-label="ซูมออก">−</button>
@@ -163,7 +164,8 @@ ul.loss li span{color:var(--muted);font-size:13px}
       <div class="panel">
         <h2>เครื่องมือวัด</h2>
         <div class="row" id="tools"></div>
-        <p class="muted" id="toolHint" style="margin:8px 0 0">วัตถุ 3 มิติ: แตะที่วัตถุครั้งเดียว ระบบแยกขอบ หาแกน และจัดรูปทรงให้เอง</p>
+        <p class="muted" id="toolHint" style="margin:8px 0 0">ทุกเครื่องมือวางจุดเข้าขอบหรือมุมให้อัตโนมัติ ลากแก้ได้เสมอ</p>
+        <p class="muted" id="libStatus" style="margin:6px 0 0"></p>
       </div>
       <div class="panel" id="outItems"></div>
       <div class="panel" id="outRef"></div>
@@ -195,12 +197,24 @@ ul.loss li span{color:var(--muted);font-size:13px}
         <label class="f">ความกว้าง (มม.)<input type="number" id="sW" step="0.01"></label>
         <label class="f">± ความกว้าง (มม.)<input type="number" id="sWsd" step="0.01"></label>
         <label class="f">ความยาว โคน–ขอบเนื้อ (มม.)<input type="number" id="sL" step="0.01"></label>
+        <label class="f">หน้าเล็บสูงจากพื้นเมื่อวางมือ (มม.)<input type="number" id="sH" step="0.5"></label>
       </div>
+    </div>
+    <div class="panel">
+      <h2>ปรับเทียบเล็บกับวัตถุที่รู้ขนาด</h2>
+      <div id="calBox"></div>
     </div>
     <div class="panel">
       <h2>กล้องในแอป</h2>
       <label class="f">ระยะโฟกัสเลนส์หลัก (เทียบ 35 มม.)<input type="number" id="sF" step="1"></label>
       <p class="muted" style="margin:6px 0 0">ภาพที่ถ่ายในแอปไม่มี EXIF จึงใช้ค่านี้แทน ค่าเริ่มต้น 27 มม. มาจากภาพที่เคยถ่ายด้วย iQOO Z9 ถ้าเปลี่ยนมือถือให้แก้ค่านี้</p>
+    </div>
+    <div class="panel">
+      <h2>ไลบรารีเสริม <small>โหลดครั้งแรกครั้งเดียว แล้วใช้ออฟไลน์</small></h2>
+      <label class="row"><input type="checkbox" id="libCv"> OpenCV.js (มุม sub-pixel)</label>
+      <label class="row"><input type="checkbox" id="libSam"> SlimSAM (แตะแล้วได้ขอบวัตถุแม่น ~10–40 MB)</label>
+      <label class="row"><input type="checkbox" id="libHands"> MediaPipe Hands (หาเล็บอัตโนมัติ)</label>
+      <p class="muted" style="margin:6px 0 0">ทุกตัวรันในเครื่อง ไม่ส่งภาพออก และไม่จดจำว่าวัตถุคืออะไร ถ้าปิดหรือโหลดไม่ได้ แอปใช้วิธีสีและขอบแทน</p>
     </div>
     <div class="panel">
       <h2>ข้อมูลในเครื่อง</h2>
