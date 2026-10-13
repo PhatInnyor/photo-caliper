@@ -133,8 +133,9 @@ async function featureMap(im) {
   for (let y = 1; y < H - 1; y++) for (let x = 1; x < W - 1; x++) { const i = y * W + x, ix = (gr[i + 1] - gr[i - 1]) / 2, iy = (gr[i + W] - gr[i - W]) / 2; xx[i] = ix * ix; yy[i] = iy * iy; xy[i] = ix * iy; }
   const box = a => {
     const t = new Float32Array(W * H), o = new Float32Array(W * H);
-    for (let y = 0; y < H; y++) { let s = 0; for (let x = 0; x < W; x++) { s += a[y * W + x]; if (x >= 5) s -= a[y * W + x - 5]; t[y * W + x] = s; } }
-    for (let x = 0; x < W; x++) { let s = 0; for (let y = 0; y < H; y++) { s += t[y * W + x]; if (y >= 5) s -= t[(y - 5) * W + x]; o[y * W + x] = s; } }
+    // centred 5x5 window (x-2..x+2); the old causal window shifted edges by 2 px
+    for (let y = 0; y < H; y++) { let s = 0; for (let x = 0; x < W + 2; x++) { if (x < W) s += a[y * W + x]; if (x >= 5) s -= a[y * W + x - 5]; if (x >= 2) t[y * W + x - 2] = s; } }
+    for (let x = 0; x < W; x++) { let s = 0; for (let y = 0; y < H + 2; y++) { if (y < H) s += t[y * W + x]; if (y >= 5) s -= t[(y - 5) * W + x]; if (y >= 2) o[(y - 2) * W + x] = s; } }
     return o;
   };
   const A = box(xx), B = box(yy), C = box(xy); im.feat = new Float32Array(W * H * 2);
@@ -314,18 +315,61 @@ function nailFromMask(im, mask, tipHint) {
   const tc = pr.tmin + pr.L * bb.t; const c = { x: pr.cx + pr.u.x * tc + pr.v.x * bb.c, y: pr.cy + pr.u.y * tc + pr.v.y * bb.c };
   const w1 = { x: c.x - pr.v.x * bw / 2, y: c.y - pr.v.y * bw / 2 }, w2 = { x: c.x + pr.v.x * bw / 2, y: c.y + pr.v.y * bw / 2 };
   const tCut = tipAtEnd ? 0 : 1, tEdge = tipAtEnd ? (edgeIdx + .5) / NB : 1 - (edgeIdx + .5) / NB;
-  const sn = p => snapAlong(im, p, { x: pr.v.x, y: pr.v.y }, 4);
-  return { pts: [sn(w1), sn(w2), { ...endPt(tCut), snapped: "auto" }, { ...endPt(tEdge), snapped: "auto" }] };
+  const sn = p => snapOut(im, c, p, { x: pr.v.x, y: pr.v.y });
+  const cl = p => ({ ...p, x: clamp(p.x, 0, im.W - 1), y: clamp(p.y, 0, im.H - 1) });
+  return { pts: [cl(sn(w1)), cl(sn(w2)), cl({ ...endPt(tCut), snapped: "auto" }), cl({ ...endPt(tEdge), snapped: "auto" })] };
+}
+// search outward from the nail centre and take the FIRST strong edge (nail/skin), not the strongest (finger/background)
+function firstPeak(g, mx, frac) { for (let i = 1; i < g.length - 1; i++) if (g[i][1] >= mx * frac && g[i][1] >= g[i - 1][1] && g[i][1] > g[i + 1][1]) { let j = i; while (j > 0 && Math.abs(g[j - 1][1] - g[i][1]) <= g[i][1] * 1e-4) j--; if (j < i) return (g[j][0] + g[i][0]) / 2; const a = g[i - 1][1], b = g[i][1], c = g[i + 1][1], den = a - 2 * b + c; const off = den < 0 ? clamp(.5 * (a - c) / den, -.5, .5) : 0; return g[i][0] + off * (g[1][0] - g[0][0]); } return null; }
+function snapOut(im, c, p, d) {
+  if (!im.feat) return { ...p, snapped: false };
+  const h = dist(c, p), s = Math.sign((p.x - c.x) * d.x + (p.y - c.y) * d.y) || 1, g = [];
+  for (let t = Math.max(1, h * .55); t <= h * 1.3 + 2; t += 1) g.push([t, grad(im, c.x + d.x * s * t, c.y + d.y * s * t)]);
+  const mx = Math.max(...g.map(a => a[1])); if (mx < im.tmax * .05) return { ...p, snapped: false };
+  const t = firstPeak(g, mx, .4); return t == null ? { ...p, snapped: false } : { x: c.x + d.x * s * t, y: c.y + d.y * s * t, snapped: "edge" };
+}
+// refine nail width points on the ORIGINAL full-resolution photo (the working image is downscaled to 1800 px)
+async function refineNailFull(im) {
+  const src = im.fullBlob || im.file; if (!src || im.k >= .999 || im.refPts.length < 2) return false;
+  try {
+    if (!im.fullBmp) im.fullBmp = await createImageBitmap(src);
+    const k = im.k, p0 = im.refPts[0], p1 = im.refPts[1], c = mid(p0, p1), w = dist(p0, p1); if (w < 3) return false;
+    const d = { x: (p1.x - p0.x) / w, y: (p1.y - p0.y) / w }, n = { x: -d.y, y: d.x };
+    const C = { x: c.x / k, y: c.y / k }, h = w / 2 / k, R = Math.ceil(h * 1.45 + 12);
+    const x0 = Math.max(0, Math.floor(C.x - R)), y0 = Math.max(0, Math.floor(C.y - R)), x1 = Math.min(im.fullBmp.width, Math.ceil(C.x + R)), y1 = Math.min(im.fullBmp.height, Math.ceil(C.y + R));
+    const cw = x1 - x0, ch = y1 - y0; if (cw < 8 || ch < 8) return false;
+    const cv = document.createElement("canvas"); cv.width = cw; cv.height = ch; const cx = cv.getContext("2d", { willReadFrequently: true }); cx.drawImage(im.fullBmp, x0, y0, cw, ch, 0, 0, cw, ch);
+    const px = cx.getImageData(0, 0, cw, ch).data;
+    const col = (x, y) => { x = clamp(Math.round(x - x0), 0, cw - 1); y = clamp(Math.round(y - y0), 0, ch - 1); return ycc(px, y * cw + x); };
+    const gr = (x, y) => { const a = col(x - d.x, y - d.y), b = col(x + d.x, y + d.y); return .5 * Math.abs(a[0] - b[0]) + Math.abs(a[1] - b[1]) + Math.abs(a[2] - b[2]); };
+    const side = s => { const g = []; for (let t = h * .55; t <= h * 1.3 + 2; t += .5) { let v = 0; for (const o of [-2, -1, 0, 1, 2]) v += gr(C.x + d.x * s * t + n.x * o, C.y + d.y * s * t + n.y * o); g.push([t, v / 5]); } const mx = Math.max(...g.map(a => a[1])); return mx > 6 ? firstPeak(g, mx, .4) : null; };
+    const tA = side(-1), tB = side(1); if (tA == null || tB == null) return false;
+    const nw = (tA + tB) * k; if (nw < w * .6 || nw > w * 1.4) return false;
+    im.refPts[0] = { x: (C.x - d.x * tA) * k, y: (C.y - d.y * tA) * k, snapped: "full" };
+    im.refPts[1] = { x: (C.x + d.x * tB) * k, y: (C.y + d.y * tB) * k, snapped: "full" };
+    im.refFull = true; return true;
+  } catch (e) { console.warn("refineNailFull", e); return false; }
 }
 async function autoNail(im, tap) {
-  let tip = null, pos = tap ? [tap] : null, neg = [];
-  if (!pos && LIB.hands.state === "ok") {
-    try { const r = LIB.hands.lm.detect(im.canvas); const hs = r.landmarks || []; if (hs.length) { const L = hs[0].map(p => ({ x: p.x * im.W, y: p.y * im.H })); tip = L[4]; pos = [lerp(L[3], L[4], .62)]; neg = [L[3], L[2]]; im.handFound = true; } } catch (e) { console.warn(e); }
+  let tip = null, pos = tap ? [tap] : null, neg = [], zone = null; im.nailFail = null;
+  if (LIB.hands.state === "ok") {
+    try {
+      const r = LIB.hands.lm.detect(im.canvas); const hs = r.landmarks || [];
+      for (const h of hs) { const L = h.map(p => ({ x: p.x * im.W, y: p.y * im.H })); const dd = dist(L[3], L[4]); if (tap && dist(tap, L[4]) > 2.5 * dd) continue; tip = L[4]; zone = { c: lerp(L[3], L[4], .6), r: dd * 1.05 }; if (!pos) pos = [lerp(L[3], L[4], .62)]; neg = [L[3], L[2]]; im.handFound = true; break; }
+    } catch (e) { console.warn(e); }
   }
   if (!pos) return false;
-  const seg = await segment(im, pos, neg, 22, "small"); if (!seg || seg.area < 50) return false;
-  const n = nailFromMask(im, seg.mask, tip); if (!n) return false;
-  im.refPts = n.pts; im.refAuto = { engine: seg.engine + (tip ? " + Hands" : ""), mask: seg.mask, iou: seg.iou }; im.refOverlay = null; return true;
+  const seg = await segment(im, pos, neg, 22, "small"); if (!seg || seg.area < 50) { im.nailFail = "หาเล็บไม่เจอ"; return false; }
+  let mask = seg.mask, area = seg.area;
+  if (zone) { // keep only the fingertip zone; a mask that fills the zone means it leaked into skin
+    mask = new Uint8Array(seg.mask.length); area = 0; const r2 = zone.r ** 2;
+    for (let i = 0; i < mask.length; i++) if (seg.mask[i]) { const x = i % im.W, y = (i / im.W) | 0; if ((x - zone.c.x) ** 2 + (y - zone.c.y) ** 2 <= r2) { mask[i] = 1; area++; } }
+    if (area < 30 || area > .8 * Math.PI * r2) { im.nailFail = "แยกเล็บออกจากผิวนิ้วไม่ได้"; return false; }
+  } else if (area > .12 * im.W * im.H || seg.touches) { im.nailFail = "บริเวณที่จับได้ใหญ่เกินเล็บ (ลามไปทั้งนิ้ว/มือ)"; return false; }
+  const n = nailFromMask(im, mask, tip); if (!n) { im.nailFail = "หาขอบเล็บไม่ได้"; return false; }
+  const wpx = dist(n.pts[0], n.pts[1]), lpx = dist(n.pts[2], n.pts[3]), rr = lpx / Math.max(wpx, 1);
+  if (wpx < 6 || rr < .35 || rr > 2.4 || (zone && wpx > 2.2 * zone.r)) { im.nailFail = "รูปทรงที่ได้ไม่ใช่สัดส่วนเล็บ"; return false; }
+  im.refPts = n.pts; await refineNailFull(im); im.refAuto = { engine: seg.engine + (tip ? " + Hands" : ""), mask: seg.mask, iou: seg.iou }; im.refOverlay = null; return true;
 }
 
 /* ======================= references ======================= */
@@ -569,7 +613,11 @@ function measureManual(it, M, k) {
   const L = (lb, v) => out.push({ lb, v: v * k, u: "มม." }), A = (lb, v) => out.push({ lb, v: v * k * k, u: "มม.²" }), V = (lb, v) => out.push({ lb, v: v * k * k * k / 1000, u: "มล." }), D = (lb, v) => out.push({ lb, v, u: "°" });
   if (T === "dist" || T === "pdist") L("ระยะ", dist(tp(P[0]), tp(P[1])));
   else if (T === "curve" || T === "poly") { const path = (T === "curve" && it.path) || P; let s = 0; for (let i = 1; i < path.length; i++) s += dist(tp(path[i - 1]), tp(path[i])); L(T === "curve" ? "ความยาวตามขอบ" : "ความยาวรวม", s); L("ระยะตรงจากต้นถึงปลาย", dist(tp(P[0]), tp(P[P.length - 1]))); }
-  else if (T === "area") { const q = it.contour.map(tp); let a = 0, p = 0; for (let i = 0; i < q.length; i++) { const j = (i + 1) % q.length; a += q[i].x * q[j].y - q[j].x * q[i].y; p += dist(q[i], q[j]); } A("พื้นที่", Math.abs(a) / 2); L("เส้นรอบรูป", p * .987); }
+  else if (T === "area") { const q = it.contour.map(tp); let a = 0, p = 0; for (let i = 0; i < q.length; i++) { const j = (i + 1) % q.length; a += q[i].x * q[j].y - q[j].x * q[i].y; p += dist(q[i], q[j]); } A("พื้นที่", Math.abs(a) / 2); L("เส้นรอบรูป", p * .987);
+    const mx = mean(q.map(v => v.x)), my = mean(q.map(v => v.y)); let sxx = 0, syy = 0, sxy = 0; for (const v of q) { sxx += (v.x - mx) ** 2; syy += (v.y - my) ** 2; sxy += (v.x - mx) * (v.y - my); }
+    const th = .5 * Math.atan2(2 * sxy, sxx - syy), ux = Math.cos(th), uy = Math.sin(th); let a0 = 1e18, a1 = -1e18, b0 = 1e18, b1 = -1e18;
+    for (const v of q) { const s1 = v.x * ux + v.y * uy, s2 = -v.x * uy + v.y * ux; a0 = Math.min(a0, s1); a1 = Math.max(a1, s1); b0 = Math.min(b0, s2); b1 = Math.max(b1, s2); }
+    L("ความยาว (แกนหลัก)", Math.max(a1 - a0, b1 - b0)); L("ความกว้าง", Math.min(a1 - a0, b1 - b0)); }
   else if (T === "angle") { const a = tp(P[0]), o = tp(P[1]), b = tp(P[2]); const u = sub(a, o), v = sub(b, o); D("มุม", Math.acos(clamp((u.x * v.x + u.y * v.y) / (Math.hypot(u.x, u.y) * Math.hypot(v.x, v.y)), -1, 1)) * R2D); }
   else if (T === "box") {
     const s = M.sIso(P[0]), v = [sub(P[1], P[0]), sub(P[2], P[0]), sub(P[3], P[0])], d = (i, j) => v[i].x * v[j].x + v[i].y * v[j].y;
@@ -583,7 +631,9 @@ function qualityWarnings(im, md) {
   if (im.sharp < 25) w.push(["ภาพเบลอ", `ขอบระบุได้หยาบ ความคลาดเพิ่มราว ${fmt(clamp(60 / Math.max(im.sharp, 1), 1, 8), 0)}%`]);
   if (!Object.keys(im.exif).length && !im.inApp) w.push(["ไม่มี EXIF", "ระยะโฟกัสสมมติ ±20% กระทบการแก้ความลึก (Δ) และมุมกล้อง"]);
   if (md && !md.err) {
-    if (md.refPx < 150) w.push(["มาตราวัดเล็กในภาพ", `${fmt(md.refPx, 0)} px (ควร ≥ 150) มาตราส่วนคลาด ~${fmt(1.5 * Math.SQRT2 / md.refPx * 100, 1)}% จากการวางจุดอย่างเดียว`]);
+    const ep = md.refPxEff || md.refPx, full = im.refPts[0] && im.refPts[0].snapped === "full";
+    if (ep < 150) w.push(["มาตราวัดเล็กในภาพ", `${fmt(ep, 0)} px${full ? " (ภาพต้นฉบับ)" : ""} ควร ≥ 150 · มาตราส่วนคลาด ~±${fmt((full ? .8 : 1.5) * Math.SQRT2 / ep * 100, 1)}% จากการวางจุดอย่างเดียว${full ? "" : ` · ภาพต้นฉบับมี ~${fmt(md.refPx / im.k, 0)} px`}`]);
+    else w.push(["ขนาดมาตราวัดในภาพ", `${fmt(ep, 0)} px${full ? " (ภาพต้นฉบับ)" : ""} · คลาดจากการวางจุด ~±${fmt((full ? .8 : 1.5) * Math.SQRT2 / ep * 100, 1)}%`]);
     const r = Math.hypot(md.c0.x - im.W / 2, md.c0.y - im.H / 2) / (Math.hypot(im.W, im.H) / 2); if (r > .7) w.push(["มาตราวัดอยู่ใกล้ขอบภาพ", "เลนส์บิดมากที่ขอบ ควรวางมาตราวัดและวัตถุใกล้กลางภาพ"]);
     if (md.Z < 250) w.push(["ถ่ายใกล้มาก", `ระยะ ~${fmt(md.Z / 10, 0)} ซม. ถ้าวัตถุกับมาตราวัดต่างระยะ 1 ซม. ค่าจะเพี้ยน ${fmt(10 / md.Z * 100, 1)}% ถ่ายไกลขึ้นแล้วซูมจะช่วยได้`]);
     if (md.check && Math.abs(md.check.ratio - 1) > .12) w.push(["สัดส่วนเล็บไม่ตรงค่าที่ตั้งไว้", `ต่าง ${fmt((md.check.ratio - 1) * 100, 0)}% เล็บอาจเอียงจากหน้ากล้อง หรือค่าเล็บในตั้งค่าคลาด`]);
@@ -600,9 +650,10 @@ function imgModel(im) {
   const c0 = def.kind === "rect" ? mid(mid(P[0], P[1]), mid(P[2], P[3])) : def.kind === "circle" ? { x: M.ell.cx, y: M.ell.cy } : mid(P[0], P[1]);
   const s0 = M.sIso(c0), Z = cam.f * s0; const refPx = def.kind === "circle" ? 2 * M.ell.a : dist(P[0], P[1]);
   const lineage = def.mine ? (def.mine.sd / def.mine.size) : 0;
-  const relRef = hyp(sz.sd / sz.a, (im.refPts[0].snapped ? 0.8 : 1.5) * Math.SQRT2 / refPx);
+  const refPxEff = im.refPts[0].snapped === "full" ? refPx / im.k : refPx;
+  const relRef = hyp(sz.sd / sz.a, (im.refPts[0].snapped ? 0.8 : 1.5) * Math.SQRT2 / refPxEff);
   let check = null; if (SET.refType === "nail" && im.refPts.length >= 4) { const meas = dist(im.refPts[2], im.refPts[3]) / dist(im.refPts[0], im.refPts[1]), exp = SET.nail.len / SET.nail.w; check = { meas, exp, ratio: meas / exp }; }
-  return { M, cam, P, sz, c0, s0, Z, refPx, relRef, check, def, lineage };
+  return { M, cam, P, sz, c0, s0, Z, refPx, refPxEff, relRef, check, def, lineage };
 }
 function evaluateAll() {
   for (const im of S.imgs) { im.model = imgModel(im); im.warn = qualityWarnings(im, im.model && !im.model.err ? im.model : null); }
@@ -614,7 +665,7 @@ function evaluateAll() {
     const dp = fuseDelta(it), Z = md.Z, k0 = kDepth(Z, dp.d);
     const base = measureManual(it, md.M, k0); if (!base.length) continue;
     const lens = md.cam.lens, dg = Math.hypot(im.W, im.H);
-    const sig = p => { const r = Math.hypot(p.x - im.W / 2, p.y - im.H / 2) / (dg / 2); return hyp(p.snapped ? .6 : 1.6, lens.distK * r * r * dg * .5); };
+    const sig = p => { const r = Math.hypot(p.x - im.W / 2, p.y - im.H / 2) / (dg / 2); return hyp(p.snapped === "full" ? .5 * im.k : p.snapped ? .6 : 1.6, lens.distK * r * r * dg * .5); };
     const jp = pts => pts.map(p => { const s = sig(p); return { x: p.x + rn() * s, y: p.y + rn() * s, snapped: p.snapped }; });
     const jitItem = () => { const c = { ...it, pts: it.pts ? jp(it.pts) : null }; if (it.path) { const e = rn() * .8; c.path = it.path.map(p => ({ x: p.x + e, y: p.y + e })); } if (it.contour) { const e = rn(); const cx = mean(it.contour.map(p => p.x)), cy = mean(it.contour.map(p => p.y)); c.contour = it.contour.map(p => { const d = Math.hypot(p.x - cx, p.y - cy) || 1; return { x: p.x + (p.x - cx) / d * e, y: p.y + (p.y - cy) / d * e }; }); } return c; };
     const acc = base.map(() => []); const rel = md.sz.sd / md.sz.a;
@@ -828,7 +879,7 @@ function draw() {
   const s = scaleOf(im), px = 1 / s; vx.imageSmoothingEnabled = s < 4 * dpr; vx.setTransform(s, 0, 0, s, -S.view.ox * s, -S.view.oy * s); vx.drawImage(im.canvas, 0, 0);
   $("zoomRead").textContent = `${fmt(s / dpr, s / dpr < 10 ? 1 : 0)}× · สูงสุด ${fmt(zMax(im) * baseS(im) / dpr, 0)}×`;
   const acc = cssv("--acc"), amb = cssv("--amber"), bad = cssv("--bad"); const u = px * dpr;
-  const dot = (p, c, r = 4) => { vx.fillStyle = c; vx.beginPath(); vx.arc(p.x, p.y, r * u, 0, 7); vx.fill(); vx.lineWidth = 1.3 * u; vx.strokeStyle = "#fff"; vx.stroke(); if (p.snapped) { vx.strokeStyle = c; vx.beginPath(); vx.arc(p.x, p.y, (r + 3) * u, 0, 7); vx.stroke(); } };
+  const dot = (p, c, r = 4) => { vx.globalAlpha = .45; vx.fillStyle = c; vx.beginPath(); vx.arc(p.x, p.y, r * u, 0, 7); vx.fill(); vx.globalAlpha = 1; vx.lineWidth = 1 * u; vx.strokeStyle = "#fff"; vx.stroke(); const L = (r + 4) * u; vx.strokeStyle = "#000"; vx.lineWidth = 2.2 * u; vx.beginPath(); vx.moveTo(p.x - L, p.y); vx.lineTo(p.x + L, p.y); vx.moveTo(p.x, p.y - L); vx.lineTo(p.x, p.y + L); vx.stroke(); vx.strokeStyle = p.snapped === "full" ? "#5FC484" : "#fff"; vx.lineWidth = 1 * u; vx.stroke(); };
   const path = (P, c, close, w = 2) => { if (P.length < 2) return; vx.strokeStyle = c; vx.lineWidth = w * u; vx.beginPath(); vx.moveTo(P[0].x, P[0].y); for (const p of P.slice(1)) vx.lineTo(p.x, p.y); if (close) vx.closePath(); vx.stroke(); };
   const label = (p, t, c) => { vx.font = `600 ${12 * u}px ${cssv("--f-mono")}`; const w = vx.measureText(t).width; vx.fillStyle = c; vx.fillRect(p.x + 6 * u, p.y - 16 * u, w + 8 * u, 16 * u); vx.fillStyle = "#fff"; vx.fillText(t, p.x + 10 * u, p.y - 4 * u); };
   if (im.refAuto && im.refAuto.mask) vx.drawImage(overlay(im, im.refAuto.mask, "--amber", "refOverlay", im), 0, 0);
@@ -844,7 +895,7 @@ function draw() {
     if (it.tool === "obj" || it.tool === "area") {
       const tgt = isSide ? it.side : it; (tgt.neg || []).forEach(p => dot(p, bad, 3)); if (!tgt.seg) { (tgt.seeds || []).forEach(p => dot(p, acc)); continue; }
       vx.drawImage(overlay(im, tgt.seg.mask, "--acc", "overlay", tgt), 0, 0);
-      if (it.tool === "area") { if (it.contour) path(it.contour, acc, true, 1.6); const v = it.res && it.res.vals[0]; if (tgt.seeds[0]) label(tgt.seeds[0], `#${it.id}${v ? " " + fmt(v.v, 1) + " " + v.u : ""}`, acc); }
+      if (it.tool === "area") { if (it.contour) path(it.contour, acc, true, 1.6); const v = it.res && it.res.vals[0], v2 = it.res && it.res.vals[2]; if (tgt.seeds[0]) label(tgt.seeds[0], `#${it.id}${v ? " " + fmt(v.v, 1) + " " + v.u : ""}${v2 ? " · ยาว " + fmt(v2.v, 1) + " มม." : ""}`, acc); }
       const pr = tgt.pr; if (pr) { const a = { x: pr.cx + pr.u.x * pr.tmin, y: pr.cy + pr.u.y * pr.tmin }, b = { x: pr.cx + pr.u.x * (pr.tmin + pr.L), y: pr.cy + pr.u.y * (pr.tmin + pr.L) }; vx.setLineDash([8 * u, 6 * u]); path([a, b], acc, false, 2); vx.setLineDash([]); if (!isSide && it.ell) { vx.strokeStyle = amb; vx.lineWidth = 1.5 * u; vx.beginPath(); vx.ellipse(it.ell.cx, it.ell.cy, it.ell.a, it.ell.b, it.ell.ang, 0, 7); vx.stroke(); } const v0 = it.res && it.res.vals[0]; label(a, `#${it.id}${isSide ? " ข้าง" : ""}${v0 ? " " + fmt(v0.v, 1) + " มม." : ""}`, acc); }
       (tgt.seeds || []).forEach(p => dot(p, acc, 3)); continue;
     }
@@ -867,7 +918,7 @@ async function tapAction(im, ip) {
   if (t && t.type === "contact") { const it = t.item; if (it.imgId !== im.id) return; it.dsrc.contact = { pt: { x: ip.x, y: ip.y } }; it.dOpen = true; setTask(null); renderAll(); return; }
   if (t && t.type === "ref" && t.img === im) {
     const def = refDef();
-    if ((def.kind !== "line" || SET.refType === "nail") && (!im.refPts.length || SET.refType !== "nail")) { setBusy("กำลังหามาตราวัดอัตโนมัติ…"); const ok = await autoRef(im, ip); setBusy(null); if (ok) { setTask(null); renderAll(); return; } $("fsTask").innerHTML = $("task").innerHTML = `<b>หาอัตโนมัติไม่สำเร็จ</b> · แตะวางจุดเองได้ (${def.need} จุด)`; if (!im.refPts.length && SET.refType === "nail") return; }
+    if (!im.manualRef && (def.kind !== "line" || SET.refType === "nail") && (!im.refPts.length || SET.refType !== "nail")) { setBusy("กำลังหามาตราวัดอัตโนมัติ…"); const ok = await autoRef(im, ip); setBusy(null); if (ok) { setTask(null); renderAll(); return; } im.manualRef = true; $("fsTask").innerHTML = $("task").innerHTML = `<b>หาอัตโนมัติไม่สำเร็จ</b>${im.nailFail ? " (" + esc(im.nailFail) + ")" : ""} · ซูมแล้วแตะวางจุดเอง: ${SET.refType === "nail" ? "ขอบซ้าย → ขอบขวาของเล็บ (แล้วโคน → ปลาย ถ้าต้องการ)" : def.need + " จุด"}`; if (!im.refPts.length && SET.refType === "nail") return; }
     if (im.refPts.length < (def.max || def.need)) { im.refPts.push(snapPoint(im, ip)); if (im.refPts.length >= (def.max || def.need)) setTask(null); else setTask(t); renderAll(); }
     return;
   }

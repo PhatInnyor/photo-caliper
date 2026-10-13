@@ -1,5 +1,5 @@
 // Offline cache for the app shell. Bump VERSION whenever any file changes.
-const VERSION = "pc-v3";
+const VERSION = "pc-v4";
 const SHELL = ["./", "./index.html", "./app.js", "./manifest.webmanifest", "./icon-192.png", "./icon-512.png","./mode3d.js","./colmap/run_colmap.bat","./colmap/scale_model.py","./colmap/README.txt"];
 self.addEventListener("install", e => { e.waitUntil(caches.open(VERSION).then(c => c.addAll(SHELL)).then(() => self.skipWaiting())); });
 self.addEventListener("activate", e => { e.waitUntil(caches.keys().then(ks => Promise.all(ks.filter(k => k !== VERSION).map(k => caches.delete(k)))).then(() => self.clients.claim())); });
