@@ -161,11 +161,11 @@ function snapPoint(im, p) {
 /* ======================= reference definitions ======================= */
 const REF = {
   nail: { need: 2, max: 4, kind: "line", name: () => `เล็บนิ้วโป้ง ${fmt(SET.nail.w, 1)} ± ${fmt(SET.nail.sd, 1)} มม.`,
-    hint: "แตะขอบซ้ายและขวาของเล็บ (ช่วงกลาง ส่วนที่ติดเนื้อ) ถ้าอยากให้ตรวจมุมเอียงของเล็บ แตะเพิ่ม: โคนเล็บ แล้วขอบเนื้อปลาย ให้นิ้วอยู่ระยะเดียวกับวัตถุ" },
+    hint: "แตะใกล้ขอบซ้ายและขวาของแผ่นเล็บ (ช่วงกลาง) ไม่ต้องแม่น ระบบเลื่อนจุดไปที่ขอบแผ่นเล็บด้านในให้ ไม่ใช่ร่องผิวข้างเล็บ · ถ้าอยากตรวจมุมเอียง แตะเพิ่ม: โคนเล็บ แล้วขอบเนื้อปลาย · ให้นิ้วอยู่ระยะเดียวกับวัตถุ" },
   card: { need: 4, kind: "rect", a: 85.60, b: 53.98, sd: 0.05, name: () => "บัตร ID-1 85.60 × 53.98 มม.", hint: "แตะมุมบัตร 4 มุมตามลำดับรอบ เริ่มจากมุมที่ทำให้ขอบแรก (1→2) เป็นด้านยาว" },
   a4: { need: 4, kind: "rect", a: 297, b: 210, sd: 0.5, name: () => "กระดาษ A4 297 × 210 มม.", hint: "แตะมุมกระดาษ 4 มุมตามลำดับรอบ ขอบแรก (1→2) คือด้านยาว" },
   rect: { need: 4, kind: "rect", name: () => `สี่เหลี่ยม ${fmt(SET.rect.a, 1)} × ${fmt(SET.rect.b, 1)} มม.`, hint: "แตะ 4 มุมตามลำดับรอบ ขอบแรก (1→2) คือด้าน 'กว้าง'" },
-  circle: { need: 5, kind: "circle", name: () => `วงกลม ⌀ ${fmt(SET.circle.d, 2)} มม.`, hint: "แตะ 5 จุดกระจายรอบขอบวงกลม" },
+  circle: { need: 5, kind: "circle", name: () => `วงกลม ⌀ ${fmt(SET.circle.d, 2)} มม.`, hint: "แตะกลางวงกลม 1 ครั้ง ระบบหาขอบรอบวงให้อัตโนมัติ (ถ้าปิด 'ขอบอัตโนมัติ' ให้แตะ 5 จุดรอบขอบเอง)" },
   line: { need: 2, kind: "line", name: () => `ระยะ ${fmt(SET.line.L, 1)} มม.`, hint: "แตะปลายทั้งสองของระยะที่รู้ เช่น ขีด 0 และ 10 ซม." }
 };
 function refSize() {
@@ -186,7 +186,8 @@ const TOOLS = {
   angle: { n: "มุม", need: 3, hint: "แตะ ปลายแขน 1 → จุดยอดมุม → ปลายแขน 2" },
   cyl: { n: "ทรงกระบอก (วางเอง)", need: 5, hint: "แตะ ขอบบนซ้าย → บนขวา → ล่างซ้าย → ล่างขวา → จุดหน้าสุดของวงรีด้านบน" },
   box: { n: "กล่อง", need: 4, hint: "แตะ มุมที่ใกล้กล้องที่สุด แล้วปลายขอบ 3 เส้นที่ออกจากมุมนั้น" },
-  sphere: { n: "ทรงรี (วางเอง)", need: 5, hint: "แตะ 5 จุดรอบขอบวัตถุ" }
+  sphere: { n: "ทรงรี (วางเอง)", need: 5, hint: "แตะ 5 จุดรอบขอบวัตถุ" },
+  circ: { n: "วงกลม/วงรี (หาขอบอัตโนมัติ)", need: 1, hint: "แตะกลางวัตถุทรงกลม 1 ครั้ง ระบบหาขอบรอบวงให้ (วัตถุต้องวางบนระนาบเดียวกับมาตราวัด)" }
 };
 
 /* ======================= state ======================= */
@@ -373,13 +374,107 @@ function slices(pr, s, NB = 100, edgeBias = 0, noise = 0, lenJit = 0) {
   return { w: out, L, arc, dz: L / NB };
 }
 
+
+/* ======================= edge tools (no AI) ======================= */
+let AUTOEDGE = true, AUTOCURVE = true;
+function sampleC(im, x, y) {
+  x = clamp(x, 0, im.W - 1.001); y = clamp(y, 0, im.H - 1.001); const x0 = x | 0, y0 = y | 0, fx = x - x0, fy = y - y0, o = [0, 0, 0];
+  for (const [dx, dy, w] of [[0, 0, (1 - fx) * (1 - fy)], [1, 0, fx * (1 - fy)], [0, 1, (1 - fx) * fy], [1, 1, fx * fy]]) { const c = ycc(im.px, (y0 + dy) * im.W + x0 + dx); o[0] += c[0] * w; o[1] += c[1] * w; o[2] += c[2] * w; }
+  return o;
+}
+const cdiff = (a, b) => Math.sqrt(.5 * (b[0] - a[0]) ** 2 + (b[1] - a[1]) ** 2 + (b[2] - a[2]) ** 2);
+// colour-gradient profile along direction d (unit, pointing outward) around p, s in [-R, R]; averaged over 3 parallel lines
+function edgeProfile(im, p, d, R) {
+  const n = { x: -d.y, y: d.x }, col = s => { const a = [0, 0, 0]; for (const o of [-2, 0, 2]) { const c = sampleC(im, p.x + d.x * s + n.x * o, p.y + d.y * s + n.y * o); a[0] += c[0]; a[1] += c[1]; a[2] += c[2]; } return a.map(v => v / 3); };
+  const s = [], g = []; for (let t = -R; t <= R; t += .5) { s.push(t); g.push(cdiff(col(t - 1.5), col(t + 1.5))); }
+  return { s, g };
+}
+function refineEnd(im, p, d, R, inner) {
+  const { s, g } = edgeProfile(im, p, d, R); const gmax = Math.max(...g); if (!(gmax > 6)) return { ok: false, strength: gmax };
+  let idx = -1;
+  if (inner) for (let i = 1; i < g.length - 1; i++) if (g[i] >= g[i - 1] && g[i] >= g[i + 1] && g[i] > .35 * gmax) { idx = i; break; }
+  if (idx < 0) idx = g.indexOf(gmax);
+  let off = 0; if (idx > 0 && idx < g.length - 1) { const a = g[idx - 1], b = g[idx], c = g[idx + 1], den = a - 2 * b + c; if (den < 0) off = clamp(.5 * (a - c) / den, -.5, .5); }
+  const ss = s[idx] + off * .5; return { ok: true, p: { x: p.x + d.x * ss, y: p.y + d.y * ss }, strength: g[idx], shift: ss };
+}
+function refineOne(im, pt, other, inner) {
+  const L = dist(pt, other); if (L < 6) return; const d = { x: (pt.x - other.x) / L, y: (pt.y - other.y) / L };
+  const r = refineEnd(im, pt, d, clamp(L * .15, 8, 40), inner);
+  if (r.ok) { pt.x = r.p.x; pt.y = r.p.y; pt.snapped = "edge"; pt.refined = true; pt.edgeStr = r.strength; } else { pt.refined = true; pt.edgeStr = r.strength; pt.weak = true; }
+}
+function partnerOf(im, pt) {
+  const R = im.refPts, kind = REF[SET.refType].kind;
+  if (kind === "line") { const i = R.indexOf(pt); if (i >= 0 && R[i ^ 1]) return { other: R[i ^ 1], inner: SET.refType === "nail" && i < 2 }; }
+  for (const it of S.items) if (it.imgId === im.id && it.tool === "dist" && it.pts) { const i = it.pts.indexOf(pt); if (i >= 0 && it.pts[i ^ 1]) return { other: it.pts[i ^ 1], inner: false }; }
+  return null;
+}
+function autoRefineAfter(im, pt) {
+  if (!AUTOEDGE) return; const pr = partnerOf(im, pt); if (!pr) return;
+  refineOne(im, pt, pr.other, pr.inner);
+  if (!pr.other.refined) refineOne(im, pr.other, pt, pr.inner);
+}
+// ellipse from one tap: 72 rays, top-3 colour edges per ray, RANSAC
+function autoEllipse(im, c) {
+  const maxR = Math.min(im.W, im.H) * .48, rays = []; let seedC = [0, 0, 0]; { let n = 0; for (let dy = -4; dy <= 4; dy += 2) for (let dx = -4; dx <= 4; dx += 2) { const q = sampleC(im, c.x + dx, c.y + dy); seedC[0] += q[0]; seedC[1] += q[1]; seedC[2] += q[2]; n++; } seedC = seedC.map(v => v / n); }
+  for (let k = 0; k < 72; k++) {
+    const a = k * 5 / R2D, d = { x: Math.cos(a), y: Math.sin(a) }, g = [];
+    for (let r = 4; r < maxR; r += 1) { const x = c.x + d.x * r, y = c.y + d.y * r; if (x < 2 || y < 2 || x > im.W - 3 || y > im.H - 3) break; g.push([r, cdiff(sampleC(im, c.x + d.x * (r - 1.5), c.y + d.y * (r - 1.5)), sampleC(im, c.x + d.x * (r + 1.5), c.y + d.y * (r + 1.5)))]); }
+    const pk = []; for (let i = 1; i < g.length - 1; i++) if (g[i][1] >= g[i - 1][1] && g[i][1] >= g[i + 1][1] && g[i][1] > 8) { const r = g[i][0], inC = sampleC(im, c.x + d.x * (r - 4), c.y + d.y * (r - 4)), outC = sampleC(im, c.x + d.x * (r + 4), c.y + d.y * (r + 4)); if (cdiff(inC, seedC) < cdiff(outC, seedC)) pk.push(g[i]); }
+    pk.sort((p, q) => q[1] - p[1]); rays.push(pk.slice(0, 4).map(([r]) => ({ x: c.x + d.x * r, y: c.y + d.y * r })));
+  }
+  const usable = rays.map((r, i) => i).filter(i => rays[i].length); if (usable.length < 20) return null;
+  const resid = (e, q) => { const dx = q.x - e.cx, dy = q.y - e.cy, ca = Math.cos(e.ang), sa = Math.sin(e.ang); const u = (dx * ca + dy * sa) / e.a, v = (-dx * sa + dy * ca) / e.b; return Math.abs(Math.hypot(u, v) - 1) * e.b; };
+  let best = null, bn = 0;
+  for (let it = 0; it < 900; it++) {
+    const pick = []; while (pick.length < 5) { const i = usable[Math.random() * usable.length | 0]; if (!pick.includes(i)) pick.push(i); }
+    const e = fitEllipse(pick.map(i => rays[i][Math.random() * rays[i].length | 0])); if (!e || e.a < 6 || e.b / e.a < .45 || Math.hypot(e.cx - c.x, e.cy - c.y) > .35 * e.b) continue;
+    const tol = Math.max(2, e.b * .02); let n = 0; for (const r of rays) if (r.some(q => resid(e, q) < tol)) n++;
+    if (n > bn) { bn = n; best = e; }
+  }
+  if (!best || bn < 30) return null;
+  const tol = Math.max(2, best.b * .02), inl = [];
+  for (const r of rays) { let bq = null, br = 1e9; for (const q of r) { const d = resid(best, q); if (d < br) { br = d; bq = q; } } if (bq && br < tol) inl.push(bq); }
+  let e = fitEllipse(inl) || best;
+  for (let k = 0; k < 3; k++) { const t2 = Math.max(2, e.b * .015), in2 = []; for (const r of rays) { let bq = null, br = 1e9; for (const q of r) { const d = resid(e, q); if (d < br) { br = d; bq = q; } } if (bq && br < t2) in2.push(bq); } const e2 = in2.length >= 12 && fitEllipse(in2); if (e2) e = e2; }
+  const pts = [];
+  for (let k = 0; k < 12; k++) { const t = k / 12 * 2 * Math.PI; pts.push({ x: e.cx + e.a * Math.cos(t) * Math.cos(e.ang) - e.b * Math.sin(t) * Math.sin(e.ang), y: e.cy + e.a * Math.cos(t) * Math.sin(e.ang) + e.b * Math.sin(t) * Math.cos(e.ang), snapped: "auto" }); }
+  return { e, pts, inliers: inl.length };
+}
+// Intelligent Scissors: cheapest path along strong edges between a and b (8-neighbour Dijkstra)
+function livewire(im, a, b) {
+  const pad = 25, x0 = Math.max(0, Math.floor(Math.min(a.x, b.x) - pad)), y0 = Math.max(0, Math.floor(Math.min(a.y, b.y) - pad)), x1 = Math.min(im.W - 1, Math.ceil(Math.max(a.x, b.x) + pad)), y1 = Math.min(im.H - 1, Math.ceil(Math.max(a.y, b.y) + pad));
+  const w = x1 - x0 + 1, h = y1 - y0 + 1, N = w * h; if (N > 260000) return null;
+  const tm = (im.tmax || 1) * .5, cost = new Float32Array(N);
+  for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) cost[y * w + x] = 1.08 - Math.sqrt(Math.min(1, im.feat[((y0 + y) * im.W + x0 + x) * 2 + 1] / tm));
+  const D = new Float32Array(N).fill(Infinity), prev = new Int32Array(N).fill(-1), done = new Uint8Array(N);
+  const s = (Math.round(a.y) - y0) * w + Math.round(a.x) - x0, t = (Math.round(b.y) - y0) * w + Math.round(b.x) - x0;
+  const hk = [], hv = []; const push = (k, v) => { hk.push(k); hv.push(v); let i = hk.length - 1; while (i > 0) { const p = (i - 1) >> 1; if (hk[p] <= hk[i]) break; [hk[p], hk[i]] = [hk[i], hk[p]]; [hv[p], hv[i]] = [hv[i], hv[p]]; i = p; } };
+  const pop = () => { const v = hv[0]; const lk = hk.pop(), lv = hv.pop(); if (hk.length) { hk[0] = lk; hv[0] = lv; let i = 0; for (;;) { const l = 2 * i + 1, r = l + 1; let m = i; if (l < hk.length && hk[l] < hk[m]) m = l; if (r < hk.length && hk[r] < hk[m]) m = r; if (m === i) break; [hk[m], hk[i]] = [hk[i], hk[m]]; [hv[m], hv[i]] = [hv[i], hv[m]]; i = m; } } return v; };
+  D[s] = 0; push(0, s);
+  while (hk.length) {
+    const u = pop(); if (done[u]) continue; done[u] = 1; if (u === t) break; const ux = u % w, uy = (u / w) | 0;
+    for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++) { if (!dx && !dy) continue; const vx2 = ux + dx, vy2 = uy + dy; if (vx2 < 0 || vy2 < 0 || vx2 >= w || vy2 >= h) continue; const v = vy2 * w + vx2; if (done[v]) continue; const nd = D[u] + cost[v] * (dx && dy ? 1.4142 : 1); if (nd < D[v]) { D[v] = nd; prev[v] = u; push(nd, v); } }
+  }
+  if (prev[t] < 0 && s !== t) return null;
+  const path = []; for (let v = t; v >= 0; v = prev[v]) path.push({ x: v % w + x0, y: ((v / w) | 0) + y0 });
+  path.reverse(); const out = [a]; for (let i = 3; i < path.length - 2; i += 3) out.push(path[i]); out.push(b); return out;
+}
+function updateDense(it) {
+  it.dense = null; if (!AUTOCURVE || (it.tool !== "poly" && it.tool !== "area") || it.pts.length < 2) return; const im = imgById(it.imgId); if (!im) return;
+  const P = it.pts, segs = []; const n = it.tool === "area" && it.closed ? P.length : P.length - 1;
+  for (let i = 0; i < n; i++) { const a = P[i], b = P[(i + 1) % P.length]; segs.push(livewire(im, a, b) || [a, b]); }
+  const d = []; segs.forEach((sg, i) => sg.forEach((q, j) => { if (i && !j) return; d.push(q); })); if (it.tool === "area" && it.closed) d.pop();
+  it.dense = d;
+}
+
 /* ======================= measurement core ======================= */
 function measureManual(it, M, k) {
-  const P = it.pts, T = it.tool, tp = M.toPlane, out = [];
+  const T = it.tool, P = (it.dense && (T === "poly" || T === "area")) ? it.dense : it.pts, tp = M.toPlane, out = [];
   const L = (lb, v) => out.push({ lb, v: v * k, u: "มม." }), A = (lb, v) => out.push({ lb, v: v * k * k, u: "มม.²" }), V = (lb, v) => out.push({ lb, v: v * k * k * k / 1000, u: "มล." }), D = (lb, v) => out.push({ lb, v, u: "°" });
   if (T === "dist") L("ระยะ", dist(tp(P[0]), tp(P[1])));
   else if (T === "poly") { let s = 0; for (let i = 1; i < P.length; i++) s += dist(tp(P[i - 1]), tp(P[i])); L("ความยาวตามเส้น", s); }
   else if (T === "area") { const q = P.map(tp); let a = 0, p = 0; for (let i = 0; i < q.length; i++) { const j = (i + 1) % q.length; a += q[i].x * q[j].y - q[j].x * q[i].y; p += dist(q[i], q[j]); } A("พื้นที่", Math.abs(a) / 2); L("เส้นรอบรูป", p); }
+  else if (T === "circ") { const e = fitEllipse(P.map(tp)), ei = fitEllipse(P); if (!e) return out; L("เส้นผ่านศูนย์กลางยาว", 2 * e.a); L("เส้นผ่านศูนย์กลางสั้น", 2 * e.b); L("เส้นรอบวง", ramanujan(e.a, e.b)); A("พื้นที่", Math.PI * e.a * e.b); if (ei) D("มุมเอียงจากวงรีในภาพ", Math.acos(clamp(ei.b / ei.a, 0, 1)) * R2D); }
   else if (T === "angle") { const a = tp(P[0]), o = tp(P[1]), b = tp(P[2]); const u = sub(a, o), v = sub(b, o); D("มุม", Math.acos(clamp((u.x * v.x + u.y * v.y) / (Math.hypot(u.x, u.y) * Math.hypot(v.x, v.y)), -1, 1)) * R2D); }
   else if (T === "cyl") {
     const s = M.sIso(mid(P[0], P[3])), wT = dist(P[0], P[1]), wB = dist(P[2], P[3]), cT = mid(P[0], P[1]), cB = mid(P[2], P[3]);
@@ -441,7 +536,7 @@ const SHAPE_N = { cyl: "ทรงกระบอก", frustum: "กรวยต�
 function imgModel(im) {
   if (!im) return null; const def = REF[SET.refType];
   if (im.refPts.length < def.need) return { err: `วางจุดมาตราวัดให้ครบ (${im.refPts.length}/${def.need})` };
-  const sz = refSize(); const P = im.refPts.slice(0, def.kind === "line" ? 2 : def.need);
+  const sz = refSize(); const P = def.kind === "line" ? im.refPts.slice(0, 2) : def.kind === "circle" ? im.refPts : im.refPts.slice(0, def.need);
   const lens0 = lensInfo(im); const fGuess = lens0.fpx || 26 * Math.hypot(im.W, im.H) / 43.27;
   const M = buildMapper(im, P, sz, { f: fGuess }); if (!M) return { err: "คำนวณจากจุดมาตราวัดไม่ได้ ลองวางใหม่" };
   const cam = cameraModel(im, P, M);
@@ -462,17 +557,18 @@ function evaluateAll() {
     const lens = md.cam.lens, dg = Math.hypot(im.W, im.H);
     const sig = p => { const r = Math.hypot(p.x - im.W / 2, p.y - im.H / 2) / (dg / 2); return hyp(p.snapped ? .7 : 1.6, lens.distK * r * r * dg * .5); };
     const jp = pts => pts.map(p => { const s = sig(p); return { x: p.x + rn() * s, y: p.y + rn() * s, snapped: p.snapped }; });
+    const jpD = pts => { const o = { x: rn() * .7, y: rn() * .7 }; return pts.map(p => ({ x: p.x + o.x + rn() * .3, y: p.y + o.y + rn() * .3 })); };
     const acc = base.map(() => []); const rel = md.sz.sd / md.sz.a;
     for (let n = 0; n < 300; n++) {
       const sz = { a: md.sz.a * (1 + rel * rn()), b: md.sz.b ? md.sz.b * (1 + rel * rn()) : undefined };
       const f2 = md.cam.f * (1 + md.cam.frel * rn()); const M2 = buildMapper(im, jp(md.P), sz, { f: f2, jb: rn(), jg: rn() }); if (!M2) continue;
-      const Z2 = f2 * M2.sIso(md.c0), d2 = d0 + ds * rn(); const v = measureManual({ ...it, pts: jp(it.pts) }, M2, (Z2 - d2) / Z2);
+      const Z2 = f2 * M2.sIso(md.c0), d2 = d0 + ds * rn(); const v = measureManual({ ...it, pts: jp(it.pts), dense: it.dense && jpD(it.dense) }, M2, (Z2 - d2) / Z2);
       v.forEach((o, i) => { if (isFinite(o.v)) acc[i].push(o.v); });
     }
     base.forEach((o, i) => { o.sd = sdOf(acc[i]); });
     const src = [];
     const one = (name, fn) => { const vals = []; for (let n = 0; n < 80; n++) { const r = fn(); if (r && r[0] && isFinite(r[0].v)) vals.push(r[0].v); } const s = sdOf(vals); if (s != null) src.push({ name, rel: s / Math.abs(base[0].v || 1) }); };
-    one("ตำแหน่งจุดของวัตถุ", () => measureManual({ ...it, pts: jp(it.pts) }, md.M, k0));
+    one("ตำแหน่งจุดของวัตถุ", () => measureManual({ ...it, pts: jp(it.pts), dense: it.dense && jpD(it.dense) }, md.M, k0));
     one("ตำแหน่งจุดมาตราวัด", () => { const M2 = buildMapper(im, jp(md.P), md.sz, { f: md.cam.f }); return M2 && measureManual(it, M2, k0); });
     one("ขนาดจริงของมาตราวัด", () => { const M2 = buildMapper(im, md.P, { a: md.sz.a * (1 + rel * rn()), b: md.sz.b }, { f: md.cam.f }); return M2 && measureManual(it, M2, k0); });
     if (ds > 0) one("ระยะลึกจากมาตราวัด", () => measureManual(it, md.M, (Z - (d0 + ds * rn())) / Z));
@@ -586,7 +682,7 @@ function hiddenText(it) {
     return two ? "ใช้ 2 มุม: หน้าตัดถูกประมาณเป็นวงรีจากความกว้างด้านหน้าและด้านข้าง ส่วนเว้าที่ทั้งสองมุมมองไม่เห็นจะไม่ถูกนับ และถ้าวัตถุเปลี่ยนรูประหว่างสองภาพ ค่าจะคลาด"
       : "ใช้มุมเดียว: ความลึกของวัตถุไม่มีในภาพ ระบบสมมติว่าหน้าตัดเป็นวงกลม (หรือเท่ากับความกว้างสำหรับแท่งเหลี่ยม) ด้านหลังถูกสมมติว่าสมมาตรกับด้านหน้า ถ้าแกนวัตถุเอียงเข้าหาหรือออกจากกล้อง ความยาวจะสั้นกว่าจริง";
   }
-  return { dist: "วัดเป็นเส้นตรงบนระนาบของมาตราวัด ความนูนของผิวหายไป", poly: "ระหว่างจุดเป็นเส้นตรง แตะถี่ขึ้นเพื่อเก็บส่วนโค้ง", area: "เป็นพื้นที่ภาพฉาย ถ้าผิวโค้ง พื้นที่จริงจะมากกว่า", angle: "เป็นมุมบนระนาบมาตราวัด", cyl: "ครึ่งหลังและก้นถูกบัง สมมติหน้าตัดกลม ผนังตรง", box: "3 หน้าด้านหลังถูกบัง สมมติทุกมุมเป็นมุมฉาก", sphere: "แกนลึกไม่มีในภาพ สมมติเท่าแกนสั้น" }[T];
+  return { dist: "วัดเป็นเส้นตรงบนระนาบของมาตราวัด ความนูนของผิวหายไป", poly: "ระหว่างจุดเป็นเส้นตรง แตะถี่ขึ้นเพื่อเก็บส่วนโค้ง", area: "เป็นพื้นที่ภาพฉาย ถ้าผิวโค้ง พื้นที่จริงจะมากกว่า", angle: "เป็นมุมบนระนาบมาตราวัด", circ: "ขอบหาจากสีที่ต่างจากพื้นหลัง ถ้าวัตถุมีเงาหรือขอบหยัก วงที่ได้อาจรวมเงาเข้าไป", cyl: "ครึ่งหลังและก้นถูกบัง สมมติหน้าตัดกลม ผนังตรง", box: "3 หน้าด้านหลังถูกบัง สมมติทุกมุมเป็นมุมฉาก", sphere: "แกนลึกไม่มีในภาพ สมมติเท่าแกนสั้น" }[T];
 }
 function renderAll() {
   evaluateAll(); renderChips(); renderRefPanel();
@@ -609,6 +705,8 @@ function renderAll() {
       ${p.pitch != null ? `<dt>ก้ม/เงย · หันซ้าย/ขวา</dt><dd>${fmt(p.pitch, 1)}° · ${fmt(p.yaw, 1)}°</dd><dt>มุมฉากของสี่เหลี่ยม (0 = ดี)</dt><dd>${fmt(p.skew, 3)}</dd>` : ""}
       ${im.gyro ? `<dt>ไจโรตอนถ่าย (β, γ)</dt><dd>${fmt(im.gyro.beta, 1)}°, ${fmt(im.gyro.gamma, 1)}°</dd>` : ""}
       ${im.gyroPlane ? `<dt>แก้ระนาบพื้นราบ</dt><dd>ใช้ไจโร</dd>` : ""}
+      ${md.P.slice(0, 2).some(p => p.refined) ? `<dt>ขอบอัตโนมัติ</dt><dd>${md.P.slice(0, 2).some(p => p.weak) ? "ขอบไม่ชัด ตรวจจุดเอง" : "ล็อกขอบแล้ว"}</dd>` : ""}
+      ${REF[SET.refType].kind === "circle" && md.M.ell ? `<dt>วงรีที่หาได้ (px)</dt><dd>${fmt(2 * md.M.ell.a, 1)} × ${fmt(2 * md.M.ell.b, 1)}</dd>` : ""}
       ${md.check ? `<dt>เล็บ ยาว÷กว้าง ในภาพ / ค่าจริง</dt><dd>${fmt(md.check.meas, 2)} / ${fmt(md.check.exp, 2)}</dd>` : ""}</dl>`;
     if (md.check && Math.abs(md.check.ratio - 1) > .12) h += `<p class="muted" style="margin:6px 0 0;color:var(--amber)">สัดส่วนเล็บในภาพต่างจากค่าจริง ${fmt((md.check.ratio - 1) * 100, 0)}% เล็บอาจเอียงจากหน้ากล้อง หรือค่าความยาวเล็บในตั้งค่าคลาด ผลวัดอาจคลาดเพิ่ม</p>`;
   }
@@ -694,9 +792,9 @@ function draw() {
       continue;
     }
     const P = it.pts, c = acc;
-    if (it.tool === "area") path(P, c, it.closed); else if (it.tool === "box" && P.length > 1) { for (let i = 1; i < P.length; i++) path([P[0], P[i]], c, false); }
+    if (it.dense) path(it.dense, c, it.tool === "area" && it.closed); else if (it.tool === "area") path(P, c, it.closed); else if (it.tool === "box" && P.length > 1) { for (let i = 1; i < P.length; i++) path([P[0], P[i]], c, false); }
     else if (it.tool === "cyl") { if (P.length >= 2) path([P[0], P[1]], c); if (P.length >= 4) { path([P[2], P[3]], c); path([P[0], P[2]], c); path([P[1], P[3]], c); } }
-    else if (it.tool === "sphere" && P.length >= 5) { const e = fitEllipse(P); if (e) { vx.strokeStyle = c; vx.lineWidth = 2 * px; vx.beginPath(); vx.ellipse(e.cx, e.cy, e.a, e.b, e.ang, 0, 7); vx.stroke(); } }
+    else if ((it.tool === "sphere" || it.tool === "circ") && P.length >= 5) { const e = fitEllipse(P); if (e) { vx.strokeStyle = c; vx.lineWidth = 2 * px; vx.beginPath(); vx.ellipse(e.cx, e.cy, e.a, e.b, e.ang, 0, 7); vx.stroke(); } }
     else path(P, c, false);
     P.forEach(p => dot(p, c)); if (P.length) { const v = it.res && it.res.vals[0]; label(P[0], `#${it.id}${v ? " " + fmt(v.v, 1) + " " + v.u : ""}`, c); }
   }
@@ -704,6 +802,12 @@ function draw() {
     const p = S.drag.pt, Rr = 56 * dpr, cx = Rr + 8 * dpr, cy = Rr + 8 * dpr; vx.setTransform(1, 0, 0, 1, 0, 0); vx.save(); vx.beginPath(); vx.arc(cx, cy, Rr, 0, 7); vx.clip();
     const z = fitS(im) * S.view.z * 4; vx.setTransform(z, 0, 0, z, cx - p.x * z, cy - p.y * z); vx.drawImage(im.canvas, 0, 0); vx.restore(); vx.setTransform(1, 0, 0, 1, 0, 0);
     vx.strokeStyle = amb; vx.lineWidth = 1.5 * dpr; vx.beginPath(); vx.arc(cx, cy, Rr, 0, 7); vx.moveTo(cx - 10 * dpr, cy); vx.lineTo(cx + 10 * dpr, cy); vx.moveTo(cx, cy - 10 * dpr); vx.lineTo(cx, cy + 10 * dpr); vx.stroke();
+    const pr = partnerOf(im, p);
+    if (pr) { const L = dist(p, pr.other); if (L > 6) { const d = { x: (p.x - pr.other.x) / L, y: (p.y - pr.other.y) / L }, R = clamp(L * .15, 8, 40), ep = edgeProfile(im, p, d, R), gm = Math.max(...ep.g) || 1;
+      const gx = 8 * dpr, gy = cy + Rr + 8 * dpr, gw = 2 * Rr + 8 * dpr, gh = 34 * dpr; vx.fillStyle = "rgba(0,0,0,.55)"; vx.fillRect(gx, gy, gw, gh);
+      vx.strokeStyle = "#fff"; vx.lineWidth = 1.2 * dpr; vx.beginPath(); ep.g.forEach((g, i) => { const X = gx + i / (ep.g.length - 1) * gw, Y = gy + gh - 3 * dpr - g / gm * (gh - 6 * dpr); i ? vx.lineTo(X, Y) : vx.moveTo(X, Y); }); vx.stroke();
+      vx.strokeStyle = amb; vx.beginPath(); vx.moveTo(gx + gw / 2, gy); vx.lineTo(gx + gw / 2, gy + gh); vx.stroke();
+      vx.fillStyle = "#fff"; vx.font = `${10 * dpr}px ${cssv("--f-mono")}`; vx.fillText("ใน", gx + 3 * dpr, gy + 11 * dpr); vx.fillText("นอก", gx + gw - 24 * dpr, gy + 11 * dpr); } }
   }
 }
 function evPos(e) { const b = cv.getBoundingClientRect(), k = cv.width / b.width; return { x: (e.clientX - b.left) * k, y: (e.clientY - b.top) * k }; }
@@ -715,6 +819,14 @@ cv.addEventListener("pointerdown", e => {
   if (t && t.type === "item" && t.item.tool === "obj") {
     const it = t.item, tgt = t.side ? it.side : it;
     if (tgt.imgId === im.id) { tgt.seeds = S.selObj === it ? [...(tgt.seeds || []), ip] : [ip]; S.selObj = it; runSeg(it, !!t.side); return; }
+  }
+  if (AUTOEDGE && t && t.type === "ref" && t.img === im && REF[SET.refType].kind === "circle" && !im.refPts.length) {
+    const r = autoEllipse(im, ip); if (r) { im.refPts.push(...r.pts); setTask(null); renderAll(); return; }
+    $("task").innerHTML = "<b>หาขอบวงกลมไม่เจอ</b> · แตะ 5 จุดรอบขอบเอง หรือถ่ายให้วงกลมตัดกับพื้นหลังชัดขึ้น";
+  }
+  if (t && t.type === "item" && t.item.tool === "circ" && t.item.imgId === im.id && !t.item.pts.length) {
+    const r = autoEllipse(im, ip); if (r) { t.item.pts.push(...r.pts); t.item.closed = true; setTask(null); renderAll(); } else $("task").innerHTML = "<b>หาขอบไม่เจอ</b> · ลองแตะใกล้กลางวัตถุมากขึ้น หรือใช้เครื่องมือ 'ทรงรี (วางเอง)'";
+    return;
   }
   let best = null, bd = 1e9; for (const p of editable(im)) { const d = Math.hypot(p.x - ip.x, p.y - ip.y) * s; if (d < bd) { bd = d; best = p; } }
   if (best && bd < 22 * dpr) S.drag = { pt: best, off: { x: best.x - ip.x, y: best.y - ip.y } };
@@ -736,15 +848,18 @@ cv.addEventListener("pointermove", e => {
 function endDrag() {
   const d = S.drag, im = curImg(); S.drag = null; if (!d || !d.pt) { draw(); return; }
   if (d.moved && im) Object.assign(d.pt, snapPoint(im, d.pt));
+  if (im) { d.pt.refined = false; autoRefineAfter(im, d.pt); for (const it of S.items) if (it.pts && it.pts.includes(d.pt)) updateDense(it); }
   const t = S.task;
   if (t && t.type === "ref") { const def = REF[SET.refType]; if (t.img.refPts.length >= (def.max || def.need)) setTask(null); else setTask(t); }
   else if (t && t.type === "item") { const need = TOOLS[t.item.tool].need; if (need !== "var" && t.item.pts.length >= need) { t.item.closed = true; setTask(null); } else setTask(t); }
   renderAll();
 }
 cv.addEventListener("pointerup", endDrag); cv.addEventListener("pointercancel", endDrag);
-$("undo").onclick = () => { const t = S.task; let pts = null; if (t && t.type === "ref") pts = t.img.refPts; else if (t && t.type === "item") { if (t.item.tool === "obj") { const tg = t.side ? t.item.side : t.item; if (tg.seeds && tg.seeds.length > 1) { tg.seeds.pop(); runSeg(t.item, !!t.side); } return; } pts = t.item.pts; t.item.closed = false; } else { const im = curImg(); if (im && im.refPts.length) { pts = im.refPts; setTask({ type: "ref", img: im }); } } if (pts && pts.length) { pts.pop(); setTask(S.task); renderAll(); } };
-$("done").onclick = () => { const t = S.task; if (t && t.type === "item") { t.item.closed = true; setTask(null); renderAll(); } };
+$("undo").onclick = () => { const t = S.task; let pts = null; if (t && t.type === "ref") pts = t.img.refPts; else if (t && t.type === "item") { if (t.item.tool === "obj") { const tg = t.side ? t.item.side : t.item; if (tg.seeds && tg.seeds.length > 1) { tg.seeds.pop(); runSeg(t.item, !!t.side); } return; } pts = t.item.pts; t.item.closed = false; } else { const im = curImg(); if (im && im.refPts.length) { pts = im.refPts; setTask({ type: "ref", img: im }); } } if (pts && pts.length) { pts.pop(); if (t && t.type === "item") updateDense(t.item); setTask(S.task); renderAll(); } };
+$("done").onclick = () => { const t = S.task; if (t && t.type === "item") { t.item.closed = true; updateDense(t.item); setTask(null); renderAll(); } };
 $("snap").onclick = () => { SNAP = !SNAP; $("snap").setAttribute("aria-pressed", SNAP); };
+$("autoEdge").onclick = () => { AUTOEDGE = !AUTOEDGE; $("autoEdge").setAttribute("aria-pressed", AUTOEDGE); };
+$("autoCurve").onclick = () => { AUTOCURVE = !AUTOCURVE; $("autoCurve").setAttribute("aria-pressed", AUTOCURVE); for (const it of S.items) if (it.pts) updateDense(it); renderAll(); };
 const zoom = f => { const im = curImg(); if (!im) return; const c = toImg(im, cv.width / 2, cv.height / 2); S.view.z = clamp(S.view.z * f, 1, 12); const s = fitS(im) * S.view.z; S.view.ox = c.x - cv.width / 2 / s; S.view.oy = c.y - cv.height / 2 / s; clampV(im); draw(); };
 $("zIn").onclick = () => zoom(1.6); $("zOut").onclick = () => zoom(1 / 1.6); $("zFit").onclick = () => { S.view = { z: 1, ox: 0, oy: 0 }; draw(); };
 window.addEventListener("resize", draw);
