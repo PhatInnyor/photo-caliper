@@ -9,11 +9,17 @@
 <link rel="icon" href="icon-192.png">
 <link rel="apple-touch-icon" href="icon-192.png">
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Bai+Jamjuree:wght@500;600;700&family=IBM+Plex+Sans+Thai:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<script type="importmap">
+{ "imports": {
+  "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js",
+  "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/"
+} }
+</script>
 <style>
-/* Layout: one-hand phone instrument — app bar with 3 tabs, image workbench, readouts stacked below; two columns on wide screens */
+/* Layout: one-hand phone instrument — app bar with tabs, image workbench (opens full-screen), readouts stacked below; two columns on wide screens */
 :root{
   --bg:#EBEFF0; --surface:#FFFFFF; --sunk:#F3F6F7; --ink:#162026; --muted:#56656E; --line:#CFD8DC;
-  --acc:#0F6E7A; --acc-soft:#D9EEF0; --amber:#A8670A; --amber-soft:#F6E7CC; --bad:#B53A27; --ok:#2B7546; --mask:rgba(15,110,122,.38);
+  --acc:#0F6E7A; --acc-soft:#D9EEF0; --amber:#A8670A; --amber-soft:#F6E7CC; --bad:#B53A27; --ok:#2B7546;
   --f-display:"Bai Jamjuree","IBM Plex Sans Thai",system-ui,sans-serif;
   --f-body:"IBM Plex Sans Thai",system-ui,-apple-system,"Segoe UI",sans-serif;
   --f-mono:"IBM Plex Mono",ui-monospace,Menlo,monospace;
@@ -21,7 +27,7 @@
 }
 @media (prefers-color-scheme: dark){:root{
   --bg:#0F1416; --surface:#172024; --sunk:#121A1D; --ink:#E2EAEC; --muted:#93A4AC; --line:#26343A;
-  --acc:#4FC1CC; --acc-soft:#173B40; --amber:#E9A845; --amber-soft:#3A2C17; --bad:#F27560; --ok:#5FC484; --mask:rgba(79,193,204,.38); color-scheme:dark }}
+  --acc:#4FC1CC; --acc-soft:#173B40; --amber:#E9A845; --amber-soft:#3A2C17; --bad:#F27560; --ok:#5FC484; color-scheme:dark }}
 *{box-sizing:border-box}
 html,body{margin:0}
 body{background:var(--bg);color:var(--ink);font-family:var(--f-body);font-size:15px;line-height:1.5;padding-bottom:env(safe-area-inset-bottom,0px)}
@@ -32,8 +38,8 @@ body{background:var(--bg);color:var(--ink);font-family:var(--f-body);font-size:1
 .mark::before{content:"";position:absolute;left:5px;right:5px;top:13px;height:2px;background:var(--acc)}
 .mark::after{content:"";position:absolute;left:5px;top:7px;width:2px;height:14px;background:var(--acc);box-shadow:14px 0 0 var(--acc)}
 .bar h1{font-family:var(--f-display);font-size:20px;margin:0;font-weight:700}
-.tabs{display:flex;gap:4px;margin-top:6px}
-.tab{flex:1;font:inherit;font-weight:600;background:none;border:0;border-bottom:3px solid transparent;color:var(--muted);padding:8px 4px;cursor:pointer}
+.tabs{display:flex;gap:2px;margin-top:6px;overflow-x:auto}
+.tab{flex:1;min-width:64px;font:inherit;font-weight:600;font-size:14px;background:none;border:0;border-bottom:3px solid transparent;color:var(--muted);padding:8px 4px;cursor:pointer;white-space:nowrap}
 .tab[aria-selected="true"]{color:var(--acc);border-color:var(--acc)}
 main{max-width:1280px;margin:0 auto;padding-inline:16px;padding-block:14px 60px}
 .grid{display:grid;grid-template-columns:minmax(0,1fr);gap:14px}
@@ -48,19 +54,30 @@ main{max-width:1280px;margin:0 auto;padding-inline:16px;padding-block:14px 60px}
 .btn.warn{border-color:var(--bad);color:var(--bad)}
 .chip{border-radius:999px;padding:5px 11px;font-size:13px}
 .chip[aria-pressed="true"]{border-color:var(--acc);background:var(--acc-soft)}
-.btn:focus-visible,.chip:focus-visible,.tab:focus-visible,select:focus-visible,input:focus-visible{outline:2px solid var(--amber);outline-offset:2px}
+.btn:focus-visible,.chip:focus-visible,.tab:focus-visible,select:focus-visible,input:focus-visible,summary:focus-visible{outline:2px solid var(--amber);outline-offset:2px}
+.btn[disabled]{opacity:.5;cursor:default}
 .filebtn{position:relative;overflow:hidden;display:inline-flex;align-items:center}
 .filebtn input{position:absolute;inset:0;opacity:0;cursor:pointer}
 select,input[type=number],input[type=text]{font:inherit;font-size:14px;color:var(--ink);background:var(--surface);border:1px solid var(--line);border-radius:6px;padding:6px 8px;width:100%}
 input[type=range]{width:100%}
 label.f{display:flex;flex-direction:column;gap:3px;font-size:13px;color:var(--muted);min-width:0}
 .fgrid{display:grid;grid-template-columns:repeat(auto-fit,minmax(130px,1fr));gap:10px}
-.refbar{display:flex;justify-content:space-between;align-items:center;width:100%;text-align:left;font:inherit;background:var(--amber-soft);border:1px solid var(--amber);color:var(--ink);border-radius:8px;padding:9px 12px;cursor:pointer}
+.refbar,.group>summary{display:flex;justify-content:space-between;align-items:center;width:100%;text-align:left;font:inherit;border-radius:8px;padding:9px 12px;cursor:pointer;list-style:none}
+.group>summary::-webkit-details-marker{display:none}
+.refbar{background:var(--amber-soft);border:1px solid var(--amber);color:var(--ink)}
 .refbar b{color:var(--amber)}
-.viewer{position:relative;background:var(--sunk);border:1px solid var(--line);border-radius:8px;overflow:hidden;touch-action:none}
-.viewer canvas{display:block;width:100%}
+.group{border:1px solid var(--line);border-radius:8px}
+.group>summary{font-weight:600}
+.group>summary::after{content:">>";color:var(--muted);font-family:var(--f-mono)}
+.group[open]>summary::after{content:"vv"}
+.group .gbody{padding:4px 12px 12px;display:flex;flex-direction:column;gap:8px}
+.viewer{position:relative;background:var(--sunk);border:1px solid var(--line);border-radius:8px;overflow:hidden;touch-action:none;cursor:zoom-in}
+.viewer canvas{display:block;width:100%;height:100%}
+.viewer .hint{position:absolute;right:8px;bottom:8px;font-size:12px;background:rgba(0,0,0,.55);color:#fff;border-radius:6px;padding:2px 8px;pointer-events:none}
 .task{background:var(--acc-soft);border-radius:7px;padding:8px 12px;font-size:14px}
 .task b{color:var(--acc)}
+.warnbox{background:var(--amber-soft);border-left:3px solid var(--amber);border-radius:6px;padding:8px 12px;font-size:13px}
+.warnbox li{margin:2px 0}
 .muted{color:var(--muted);font-size:13px}
 .kv{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:3px 12px;font-size:14px;margin:0}
 .kv dt{color:var(--muted)} .kv dd{margin:0;font-family:var(--f-mono);text-align:right;font-variant-numeric:tabular-nums}
@@ -75,25 +92,48 @@ table{border-collapse:collapse;width:100%;font-size:14px}
 td,th{padding:5px 6px;border-bottom:1px solid var(--line);text-align:left;vertical-align:top}
 th{font-size:12px;color:var(--muted);font-weight:600}
 td.n,th.n{text-align:right;font-family:var(--f-mono);font-variant-numeric:tabular-nums;white-space:nowrap}
+td button.mini{font:inherit;font-size:12px;border:1px solid var(--line);background:none;color:var(--acc);border-radius:5px;padding:0 6px;cursor:pointer}
 ul.loss{margin:0;padding-left:18px;font-size:14px;display:flex;flex-direction:column;gap:4px}
 ul.loss li span{color:var(--muted);font-size:13px}
 .statrow{display:grid;grid-template-columns:repeat(auto-fit,minmax(110px,1fr));gap:10px}
 .stat{border-left:3px solid var(--acc);padding-left:10px}
 .stat .v{font-family:var(--f-mono);font-size:22px;line-height:1.15;font-variant-numeric:tabular-nums}
 .stat .t{font-size:12px;color:var(--muted)}
-.cam{position:fixed;inset:0;z-index:50;background:#000;display:flex;flex-direction:column}
+/* fullscreen workbench */
+.fs{position:fixed;inset:0;z-index:60;background:#0b0f11;display:flex;flex-direction:column}
+.fs-top,.fs-bot{background:var(--surface);color:var(--ink);padding:8px 12px;display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+.fs-top{padding-top:calc(env(safe-area-inset-top,0px) + 8px)}
+.fs-bot{padding-bottom:calc(env(safe-area-inset-bottom,0px) + 8px)}
+.fs-stage{flex:1;min-height:0;position:relative;touch-action:none}
+.fs-stage .viewer{position:absolute;inset:0;border:0;border-radius:0;cursor:crosshair;background:#0b0f11}
+.fs-task{flex:1;min-width:0;font-size:13px}
+.fs-task b{color:var(--acc)}
+.zoomread{font-family:var(--f-mono);font-size:12px;color:var(--muted)}
+/* camera */
+.cam{position:fixed;inset:0;z-index:70;background:#000;display:flex;flex-direction:column}
 .cam video{flex:1;width:100%;min-height:0;object-fit:contain;background:#000}
 .cam-ui{position:absolute;inset:0;pointer-events:none}
 .cam-bottom{display:flex;justify-content:space-around;align-items:center;padding:14px 16px calc(14px + env(safe-area-inset-bottom,0px));background:#000;color:#fff;gap:10px}
 .cam-bottom .btn{background:#222;color:#fff;border-color:#444}
 .shutter{width:68px;height:68px;border-radius:50%;border:4px solid #fff;background:#fff;cursor:pointer}
-.shutter:active{transform:scale(.94)}
 .cam-read{position:absolute;top:calc(env(safe-area-inset-top,0px) + 12px);left:0;right:0;text-align:center;color:#fff;font-family:var(--f-mono);font-size:14px;text-shadow:0 1px 3px #000}
 .hist-item{display:grid;grid-template-columns:64px minmax(0,1fr) auto;gap:10px;align-items:start;border-top:1px solid var(--line);padding-top:10px;margin-top:10px}
-.hist-item img{width:64px;height:64px;object-fit:cover;border-radius:6px;background:var(--sunk)}
+.hist-item img,.hist-item .ph{width:64px;height:64px;object-fit:cover;border-radius:6px;background:var(--sunk)}
 .hist-item:first-child{border-top:0;margin-top:0;padding-top:0}
-.prose{font-size:14px;max-width:70ch}
+/* 3D */
+.stage3d{position:relative;height:min(62vh,560px);background:var(--sunk);border:1px solid var(--line);border-radius:8px;overflow:hidden;touch-action:none}
+.stage3d canvas{display:block;width:100%;height:100%}
+.thumbs{display:grid;grid-template-columns:repeat(auto-fill,minmax(84px,1fr));gap:8px}
+.thumbs figure{margin:0;position:relative;border:1px solid var(--line);border-radius:6px;overflow:hidden}
+.thumbs img{display:block;width:100%;aspect-ratio:1/1;object-fit:cover}
+.thumbs figcaption{font-size:11px;padding:2px 4px;font-family:var(--f-mono);color:var(--muted)}
+.thumbs input{position:absolute;top:4px;left:4px}
+.ar-overlay{position:fixed;inset:0;pointer-events:none;color:#fff;font-family:var(--f-body)}
+.ar-overlay .arbar{pointer-events:auto;position:absolute;left:0;right:0;bottom:0;padding:12px 16px calc(12px + env(safe-area-inset-bottom,0px));background:rgba(0,0,0,.6);display:flex;gap:8px;flex-wrap:wrap;align-items:center}
+.ar-overlay .arread{position:absolute;top:calc(env(safe-area-inset-top,0px) + 12px);left:12px;right:12px;font-family:var(--f-mono);font-size:14px;text-shadow:0 1px 3px #000}
+.prose{font-size:14px;max-width:72ch}
 .prose p{margin:0 0 8px}
+canvas.chart{width:100%;height:auto;aspect-ratio:16/10;display:block}
 @media (prefers-reduced-motion:reduce){*{transition:none!important}}
 </style>
 </head>
@@ -102,7 +142,9 @@ ul.loss li span{color:var(--muted);font-size:13px}
   <div class="bar-top"><div class="mark" aria-hidden="true"></div><h1>Photo Caliper</h1><span class="muted" id="engine" style="margin-left:auto">…</span></div>
   <div class="tabs" role="tablist">
     <button class="tab" role="tab" aria-selected="true" data-tab="measure">วัด</button>
+    <button class="tab" role="tab" aria-selected="false" data-tab="three">3D</button>
     <button class="tab" role="tab" aria-selected="false" data-tab="history">ประวัติ</button>
+    <button class="tab" role="tab" aria-selected="false" data-tab="valid">ทดสอบความแม่น</button>
     <button class="tab" role="tab" aria-selected="false" data-tab="settings">ตั้งค่า</button>
   </div>
 </div>
@@ -118,59 +160,99 @@ ul.loss li span{color:var(--muted);font-size:13px}
           <span class="btn filebtn">เลือกภาพในเครื่อง<input type="file" id="fileIn" accept="image/*" multiple></span>
         </div>
         <div class="row" id="imgChips" style="margin-top:10px"></div>
-        <button class="refbar" id="refBar" style="margin-top:10px"><span>[วัตถุมาตราวัด] <b id="refName">เล็บนิ้วโป้ง 12.0 ± 0.3 มม.</b></span><span>&gt;&gt;</span></button>
+        <button class="refbar" id="refBar" style="margin-top:10px"><span>[วัตถุมาตราวัด] <b id="refName">…</b></span><span>&gt;&gt;</span></button>
         <div class="panel" id="refPanel" hidden style="margin-top:8px;background:var(--sunk)">
           <div class="fgrid">
-            <label class="f">ชนิด<select id="refType">
-              <option value="nail">เล็บนิ้วโป้ง (มาตรฐาน)</option>
-              <option value="card">บัตร ID-1 (85.60 × 53.98 มม.)</option>
-              <option value="a4">กระดาษ A4 (297 × 210 มม.)</option>
-              <option value="rect">สี่เหลี่ยมกำหนดเอง</option>
-              <option value="circle">วงกลม (เหรียญ ฝา)</option>
-              <option value="line">ระยะที่รู้ (ไม้บรรทัด)</option>
-            </select></label>
+            <label class="f">ชนิด<select id="refType"></select></label>
             <label class="f" id="lA">กว้าง (มม.)<input type="number" id="refA" step="0.01"></label>
             <label class="f" id="lB">สูง (มม.)<input type="number" id="refB" step="0.01"></label>
             <label class="f" id="lS">± (มม.)<input type="number" id="refS" step="0.01"></label>
           </div>
           <p class="muted" id="refHint" style="margin:8px 0"></p>
-          <div class="row"><button class="btn pri" id="refAuto">หามาตราวัดอัตโนมัติ</button><button class="btn" id="refPlace">วางใหม่</button><button class="chip" id="gyroPlane" aria-pressed="false" hidden>วัตถุวางบนพื้นราบ (ใช้ไจโร)</button></div>
+          <div class="row"><button class="btn pri" id="refAuto">หามาตราวัดอัตโนมัติ</button><button class="btn" id="refPlace">วางเอง</button><button class="chip" id="gyroPlane" aria-pressed="false" hidden>วัตถุวางบนพื้นราบ (ใช้ไจโร)</button></div>
         </div>
-        <div class="viewer" id="viewer" style="margin-top:10px"><canvas id="cv"></canvas></div>
+        <div class="viewer" id="viewer" style="margin-top:10px;height:56vh"><canvas id="cv"></canvas><span class="hint" id="viewHint">แตะเพื่อเปิดเต็มจอ</span></div>
         <div class="task" id="task" style="margin-top:10px"></div>
-        <div class="row" style="margin-top:8px;justify-content:space-between">
-          <div class="row">
-            <button class="chip" id="autoEdge" aria-pressed="true">ขอบอัตโนมัติ</button>
-            <button class="chip" id="autoCurve" aria-pressed="true">ตามเส้นโค้ง</button>
-            <button class="chip" id="snap" aria-pressed="true">ดูดเข้ามุม</button>
-            <button class="chip" id="undo">ลบจุดล่าสุด</button>
-            <button class="chip" id="done" hidden>จบเส้น</button>
-            <button class="chip" id="neg" aria-pressed="false" hidden>จุดลบ (ตัดส่วนเกิน)</button>
-          </div>
-          <div class="row">
-            <button class="chip" id="zOut" aria-label="ซูมออก">−</button>
-            <button class="chip" id="zIn" aria-label="ซูมเข้า">+</button>
-            <button class="chip" id="zFit">พอดี</button>
-          </div>
-        </div>
-        <div id="segCtl" hidden style="margin-top:10px">
-          <label class="f">ความไวการแยกวัตถุ <span id="tolV"></span><input type="range" id="tol" min="6" max="70" value="24"></label>
-          <p class="muted" style="margin:4px 0 0">ถ้าพื้นที่สีฟ้าเกินวัตถุ ให้ลดค่า ถ้าไม่เต็มวัตถุ ให้เพิ่มค่า หรือแตะซ้ำบนส่วนที่ขาด</p>
-        </div>
+        <div id="warnIn" style="margin-top:8px"></div>
       </div>
     </div>
 
     <div class="col">
       <div class="panel">
-        <h2>เครื่องมือวัด</h2>
-        <div class="row" id="tools"></div>
-        <p class="muted" id="toolHint" style="margin:8px 0 0">ทุกเครื่องมือวางจุดเข้าขอบหรือมุมให้อัตโนมัติ ลากแก้ได้เสมอ</p>
-        <p class="muted" id="libStatus" style="margin:6px 0 0"></p>
+        <h2>เครื่องมือวัด <small id="libStatus"></small></h2>
+        <details class="group" open><summary>[Auto]</summary><div class="gbody"><div class="row" id="toolsAuto"></div><p class="muted" style="margin:0">แตะครั้งเดียวหรือแตะใกล้ขอบ ระบบหาขอบ มุม และรูปทรงให้</p></div></details>
+        <details class="group" style="margin-top:8px"><summary>[Manual]</summary><div class="gbody"><div class="row" id="toolsManual"></div><p class="muted" style="margin:0">วางจุดเองทุกจุด เปิดหรือปิดการดูดเข้ามุมได้ในโหมดเต็มจอ</p></div></details>
       </div>
       <div class="panel" id="outItems"></div>
       <div class="panel" id="outRef"></div>
       <div class="panel" id="outLens"></div>
       <div class="panel" id="outLoss"></div>
+    </div>
+  </div>
+</section>
+
+<!-- ======================= 3D ======================= -->
+<section id="tab-three" hidden>
+  <div class="grid">
+    <div class="col sticky">
+      <div class="panel">
+        <div class="row">
+          <span class="btn filebtn">เปิดโมเดล 3D<input type="file" id="m3File" accept=".ply,.obj,.stl,.glb,.gltf,.splat"></span>
+          <button class="btn" id="m3FromItem">สร้างจากการวัดวัตถุ 3 มิติ</button>
+          <button class="btn pri" id="m3AR" hidden>เริ่ม AR วัดจริง</button>
+        </div>
+        <div class="stage3d" id="stage3d" style="margin-top:10px"></div>
+        <p class="muted" id="m3Status" style="margin:8px 0 0">ลากหมุน · สองนิ้วซูม/เลื่อน · โหมดวัด: แตะบนพื้นผิวเพื่อวางจุด</p>
+      </div>
+    </div>
+    <div class="col">
+      <div class="panel">
+        <h2>วัดในสามมิติ</h2>
+        <div class="row">
+          <button class="chip" id="m3Pick" aria-pressed="false">โหมดวัด: วางจุด</button>
+          <button class="chip" id="m3Clear">ล้างจุด</button>
+        </div>
+        <div class="fgrid" style="margin-top:8px">
+          <label class="f">ตั้งสเกล: ระยะจริงของ 2 จุดล่าสุด (มม.)<input type="number" id="m3Known" step="0.01" placeholder="เช่น 12.00"></label>
+          <label class="f">หรือใช้มาตราวัดที่บันทึก<select id="m3Ref"></select></label>
+        </div>
+        <div class="row" style="margin-top:8px"><button class="btn" id="m3SetScale">ตั้งสเกล</button><span class="btn filebtn">โหลด scale.json<input type="file" id="m3ScaleFile" accept=".json"></span></div>
+        <div id="m3Out" style="margin-top:10px"></div>
+      </div>
+      <div class="panel">
+        <h2>หน้าตัดและรอบวง</h2>
+        <div class="fgrid">
+          <label class="f">แกน<select id="m3Axis"><option value="auto">แกนยาวที่สุด (PCA)</option><option value="x">X</option><option value="y">Y</option><option value="z">Z</option></select></label>
+          <label class="f">ตำแหน่ง <span id="m3PosV">50%</span><input type="range" id="m3Pos" min="0" max="100" value="50"></label>
+        </div>
+        <div id="m3Slice" style="margin-top:8px"></div>
+      </div>
+      <div class="panel">
+        <h2>ส่งออกโมเดล</h2>
+        <div class="row"><button class="btn" data-exp="obj">OBJ</button><button class="btn" data-exp="stl">STL</button><button class="btn" data-exp="glb">GLB</button><button class="btn" data-exp="ply">PLY</button></div>
+      </div>
+      <div class="panel">
+        <h2>ชุดภาพสำหรับ COLMAP <small>ถ่ายรอบวัตถุ 30–80 ภาพ ภาพติดกันซ้อนกัน 60–70%</small></h2>
+        <div class="row">
+          <span class="btn filebtn">เพิ่มภาพ<input type="file" id="cmImgs" accept="image/*" multiple></span>
+          <span class="btn filebtn">เพิ่มจากวิดีโอ<input type="file" id="cmVid" accept="video/*"></span>
+          <button class="btn" id="cmFromMeasure">ใช้ภาพจากแท็บวัด</button>
+        </div>
+        <label class="f" style="margin-top:8px">จำนวนเฟรมที่ดึงจากวิดีโอ<input type="number" id="cmN" value="50" min="10" max="200"></label>
+        <p class="muted" id="cmStatus" style="margin:8px 0"></p>
+        <div class="thumbs" id="cmThumbs"></div>
+        <div class="row" style="margin-top:10px"><button class="btn pri" id="cmExport">ส่งออก ZIP สำหรับ COLMAP</button><button class="btn" id="cmClear">ล้างชุดภาพ</button></div>
+        <p class="muted" style="margin:8px 0 0">มาตราวัดต้องอยู่นิ่งกับวัตถุตลอดการถ่าย (เช่น วางฝาหรือบัตรไว้ข้างวัตถุ) ถ้าใช้เล็บ มือต้องวางนิ่งบนโต๊ะ เพราะ COLMAP ต้องการฉากที่ไม่ขยับ</p>
+      </div>
+      <div class="panel">
+        <h2>AI สร้าง 3D จากภาพเดียว <small>บริการภายนอก</small></h2>
+        <div class="warnbox">ภาพจะถูก<b>ส่งออกนอกเครื่อง</b>ไปยังบริการของบุคคลที่สาม ด้านที่มองไม่เห็นเป็นการเดาของ AI <b>ห้ามใช้เป็นค่าวัด</b> ไม่ควรใช้กับภาพส่วนตัว</div>
+        <div class="row" style="margin-top:8px"><button class="btn" id="aiArm">ฉันเข้าใจ แสดงลิงก์</button></div>
+        <div id="aiLinks" hidden style="margin-top:8px" class="prose">
+          <p>1) เปิดบริการด้านล่างในเบราว์เซอร์ แล้วอัปโหลดภาพเอง 2) ดาวน์โหลดไฟล์ GLB 3) กลับมาที่นี่ "เปิดโมเดล 3D" 4) ตั้งสเกลด้วยค่าที่วัดได้จริง</p>
+          <p><a href="https://huggingface.co/spaces/JeffreyXiang/TRELLIS" target="_blank" rel="noopener">TRELLIS (Microsoft)</a> · <a href="https://huggingface.co/spaces/tencent/Hunyuan3D-2" target="_blank" rel="noopener">Hunyuan3D-2 (Tencent)</a></p>
+        </div>
+      </div>
     </div>
   </div>
 </section>
@@ -181,10 +263,24 @@ ul.loss li span{color:var(--muted);font-size:13px}
     <div class="panel">
       <h2>ประวัติการวัด <small id="histCount"></small></h2>
       <div class="row"><button class="btn" id="csv">ส่งออก CSV</button><button class="btn" id="csvCopy">คัดลอก CSV</button></div>
-      <p class="muted" style="margin:8px 0 0">เก็บเฉพาะตัวเลขและรูปย่อขนาดเล็กในเครื่องนี้ ภาพเต็มไม่ถูกบันทึก</p>
     </div>
     <div class="panel" id="histGroups"></div>
     <div class="panel" id="histList"></div>
+  </div>
+</section>
+
+<!-- ======================= VALIDATION ======================= -->
+<section id="tab-valid" hidden>
+  <div class="col">
+    <div class="panel">
+      <h2>ทดสอบความแม่นของระบบ <small>วัดวัตถุที่รู้ขนาดจริง แล้วกรอก "ค่าจริง" ใต้ผลการวัด</small></h2>
+      <div id="validOut"></div>
+    </div>
+    <div class="panel">
+      <h2>Bland–Altman <small>ความต่าง (วัด − จริง) เทียบค่าเฉลี่ย, หน่วย %</small></h2>
+      <canvas class="chart" id="baChart" width="900" height="560"></canvas>
+    </div>
+    <div class="panel" id="validList"></div>
   </div>
 </section>
 
@@ -200,37 +296,51 @@ ul.loss li span{color:var(--muted);font-size:13px}
         <label class="f">หน้าเล็บสูงจากพื้นเมื่อวางมือ (มม.)<input type="number" id="sH" step="0.5"></label>
       </div>
     </div>
-    <div class="panel">
-      <h2>ปรับเทียบเล็บกับวัตถุที่รู้ขนาด</h2>
-      <div id="calBox"></div>
-    </div>
+    <div class="panel"><h2>ปรับเทียบเล็บกับวัตถุที่รู้ขนาด</h2><div id="calBox"></div></div>
+    <div class="panel"><h2>มาตราวัดที่บันทึกไว้</h2><div id="myRefBox"></div></div>
     <div class="panel">
       <h2>กล้องในแอป</h2>
       <label class="f">ระยะโฟกัสเลนส์หลัก (เทียบ 35 มม.)<input type="number" id="sF" step="1"></label>
-      <p class="muted" style="margin:6px 0 0">ภาพที่ถ่ายในแอปไม่มี EXIF จึงใช้ค่านี้แทน ค่าเริ่มต้น 27 มม. มาจากภาพที่เคยถ่ายด้วย iQOO Z9 ถ้าเปลี่ยนมือถือให้แก้ค่านี้</p>
+      <p class="muted" style="margin:6px 0 0">ภาพจากกล้องในแอปไม่มี EXIF จึงใช้ค่านี้ ค่าเริ่มต้น 27 มม. มาจากภาพของ iQOO Z9</p>
     </div>
     <div class="panel">
-      <h2>ไลบรารีเสริม <small>โหลดครั้งแรกครั้งเดียว แล้วใช้ออฟไลน์</small></h2>
+      <h2>ไลบรารีเสริม <small>โหลดครั้งแรกครั้งเดียว</small></h2>
       <label class="row"><input type="checkbox" id="libCv"> OpenCV.js (มุม sub-pixel)</label>
-      <label class="row"><input type="checkbox" id="libSam"> SlimSAM (แตะแล้วได้ขอบวัตถุแม่น ~10–40 MB)</label>
+      <label class="row"><input type="checkbox" id="libSam"> SlimSAM (แตะแล้วได้ขอบวัตถุแม่น)</label>
       <label class="row"><input type="checkbox" id="libHands"> MediaPipe Hands (หาเล็บอัตโนมัติ)</label>
-      <p class="muted" style="margin:6px 0 0">ทุกตัวรันในเครื่อง ไม่ส่งภาพออก และไม่จดจำว่าวัตถุคืออะไร ถ้าปิดหรือโหลดไม่ได้ แอปใช้วิธีสีและขอบแทน</p>
+      <p class="muted" style="margin:6px 0 0">ทุกตัวรันในเครื่อง ไม่ส่งภาพออก และไม่จดจำว่าวัตถุคืออะไร</p>
+    </div>
+    <div class="panel">
+      <h2>ความเป็นส่วนตัว</h2>
+      <label class="row"><input type="checkbox" id="sThumb"> เก็บรูปย่อในประวัติ (ค่าเริ่มต้น: ไม่เก็บ)</label>
+      <p class="muted" style="margin:6px 0 0">ชื่อการวัดเป็นอะไรก็ได้ ไม่จำเป็นต้องบอกว่าเป็นวัตถุอะไร</p>
+    </div>
+    <div class="panel">
+      <h2>สำรองและกู้คืน</h2>
+      <div class="row"><button class="btn" id="bkOut">ส่งออก JSON ทั้งหมด</button><span class="btn filebtn">นำเข้า JSON<input type="file" id="bkIn" accept=".json"></span><span class="muted" id="bkMsg"></span></div>
     </div>
     <div class="panel">
       <h2>ข้อมูลในเครื่อง</h2>
       <div class="row"><button class="btn warn" id="wipe">ล้างข้อมูลทั้งหมด</button><span class="muted" id="wipeMsg"></span></div>
-      <p class="muted" style="margin:8px 0 0">ลบประวัติ การตั้งค่า และไฟล์แอปที่เก็บไว้ใช้ออฟไลน์ แล้วโหลดใหม่</p>
-    </div>
-    <div class="panel prose">
-      <h2>วิธีคำนวณ</h2>
-      <p><b>มาตราส่วน</b> จากวัตถุมาตราวัดในภาพเดียวกัน สี่เหลี่ยมใช้ homography จึงแก้มุมเอียงได้ครบ วงกลมบอกมุมเอียงจากวงรี เล็บและไม้บรรทัดให้มาตราส่วนอย่างเดียว ถ้าถ่ายด้วยกล้องในแอปและวัตถุวางบนพื้นราบ ระบบใช้มุมจากไจโรแก้ระนาบให้</p>
-      <p><b>วัตถุ 3 มิติอัตโนมัติ</b> แยกวัตถุจากพื้นหลังด้วยสีและขอบ (คำนวณขอบด้วย WebGPU) หาแกนหลักด้วย PCA วัดความกว้างทีละชั้นตามแกน แล้วเทียบกับทรงกระบอก กรวยตัด และทรงรี ถ้าไม่เข้ากับทรงใด จะใช้ทรงหมุนรอบแกนแบบหั่นชั้น ภาพด้านข้างทำให้รู้หน้าตัดจริงเป็นวงรีในทุกชั้น</p>
-      <p><b>ความคลาดเคลื่อน</b> จำลอง Monte Carlo โดยสุ่มตำแหน่งจุด ขอบวัตถุ ขนาดมาตราวัด ระยะโฟกัส และระยะลึก แล้วรายงาน ±1σ และแหล่งความคลาดหลัก</p>
-      <p><b>ไม่มี AI</b> ระบบไม่รู้ว่าวัตถุในภาพคืออะไร และไม่ส่งภาพออกจากเครื่อง</p>
     </div>
   </div>
 </section>
 </main>
+
+<!-- ======================= FULLSCREEN WORKBENCH ======================= -->
+<div class="fs" id="fs" hidden>
+  <div class="fs-top"><div class="fs-task" id="fsTask"></div><span class="zoomread" id="zoomRead"></span><button class="btn pri" id="fsClose">เสร็จ</button></div>
+  <div class="fs-stage" id="fsStage"></div>
+  <div class="fs-bot">
+    <button class="chip" id="snap" aria-pressed="true">ดูดเข้ามุม/ขอบ</button>
+    <button class="chip" id="undo">ย้อน</button>
+    <button class="chip" id="done" hidden>จบเส้น</button>
+    <button class="chip" id="neg" aria-pressed="false" hidden>จุดลบ</button>
+    <button class="chip" id="zFit">พอดีจอ</button>
+    <button class="chip" id="z1">1:1</button>
+    <div id="segCtl" hidden style="flex:1;min-width:160px"><label class="f">ความไวแยกวัตถุ (เมื่อไม่มี SAM) <span id="tolV"></span><input type="range" id="tol" min="6" max="70" value="24"></label></div>
+  </div>
+</div>
 
 <!-- ======================= CAMERA ======================= -->
 <div class="cam" id="cam" hidden>
@@ -244,6 +354,18 @@ ul.loss li span{color:var(--muted);font-size:13px}
   </div>
 </div>
 
+<div class="ar-overlay" id="arOverlay" hidden>
+  <div class="arread" id="arRead">เล็งพื้นผิวให้เห็นวงกลม แล้วแตะหน้าจอเพื่อวางจุด</div>
+  <div class="arbar">
+    <button class="btn" id="arUndo">ย้อน</button>
+    <button class="btn" id="arDelta">โหมด Δ: เล็บ → วัตถุ</button>
+    <select id="arSend" style="max-width:200px"></select>
+    <button class="btn" id="arSendBtn">ส่ง Δ ไปการวัด</button>
+    <button class="btn pri" id="arExit">ออก</button>
+  </div>
+</div>
+
 <script src="app.js"></script>
+<script type="module" src="mode3d.js"></script>
 </body>
 </html>
