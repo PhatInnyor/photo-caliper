@@ -1,0 +1,233 @@
+<!doctype html>
+<html lang="th">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Photo Caliper</title>
+<meta name="theme-color" content="#0F6E7A">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" href="icon-192.png">
+<link rel="apple-touch-icon" href="icon-192.png">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Bai+Jamjuree:wght@500;600;700&family=IBM+Plex+Sans+Thai:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<style>
+/* Layout: one-hand phone instrument — app bar with 3 tabs, image workbench, readouts stacked below; two columns on wide screens */
+:root{
+  --bg:#EBEFF0; --surface:#FFFFFF; --sunk:#F3F6F7; --ink:#162026; --muted:#56656E; --line:#CFD8DC;
+  --acc:#0F6E7A; --acc-soft:#D9EEF0; --amber:#A8670A; --amber-soft:#F6E7CC; --bad:#B53A27; --ok:#2B7546; --mask:rgba(15,110,122,.38);
+  --f-display:"Bai Jamjuree","IBM Plex Sans Thai",system-ui,sans-serif;
+  --f-body:"IBM Plex Sans Thai",system-ui,-apple-system,"Segoe UI",sans-serif;
+  --f-mono:"IBM Plex Mono",ui-monospace,Menlo,monospace;
+  color-scheme:light;
+}
+@media (prefers-color-scheme: dark){:root{
+  --bg:#0F1416; --surface:#172024; --sunk:#121A1D; --ink:#E2EAEC; --muted:#93A4AC; --line:#26343A;
+  --acc:#4FC1CC; --acc-soft:#173B40; --amber:#E9A845; --amber-soft:#3A2C17; --bad:#F27560; --ok:#5FC484; --mask:rgba(79,193,204,.38); color-scheme:dark }}
+*{box-sizing:border-box}
+html,body{margin:0}
+body{background:var(--bg);color:var(--ink);font-family:var(--f-body);font-size:15px;line-height:1.5;padding-bottom:env(safe-area-inset-bottom,0px)}
+[hidden]{display:none!important}
+.bar{position:sticky;top:0;z-index:20;background:var(--surface);border-bottom:1px solid var(--line);padding:calc(env(safe-area-inset-top,0px) + 8px) 16px 0}
+.bar-top{display:flex;align-items:center;gap:10px}
+.mark{width:30px;height:30px;border-radius:6px;border:2px solid var(--acc);position:relative;flex:none}
+.mark::before{content:"";position:absolute;left:5px;right:5px;top:13px;height:2px;background:var(--acc)}
+.mark::after{content:"";position:absolute;left:5px;top:7px;width:2px;height:14px;background:var(--acc);box-shadow:14px 0 0 var(--acc)}
+.bar h1{font-family:var(--f-display);font-size:20px;margin:0;font-weight:700}
+.tabs{display:flex;gap:4px;margin-top:6px}
+.tab{flex:1;font:inherit;font-weight:600;background:none;border:0;border-bottom:3px solid transparent;color:var(--muted);padding:8px 4px;cursor:pointer}
+.tab[aria-selected="true"]{color:var(--acc);border-color:var(--acc)}
+main{max-width:1280px;margin:0 auto;padding-inline:16px;padding-block:14px 60px}
+.grid{display:grid;grid-template-columns:minmax(0,1fr);gap:14px}
+@media (min-width:980px){.grid{grid-template-columns:minmax(0,11fr) minmax(0,9fr)}.sticky{position:sticky;top:110px;align-self:start}}
+.col{display:flex;flex-direction:column;gap:12px;min-width:0}
+.panel{background:var(--surface);border:1px solid var(--line);border-radius:10px;padding:12px 14px;min-width:0}
+.panel h2{font-family:var(--f-display);font-weight:600;font-size:16px;margin:0 0 8px;display:flex;gap:8px;align-items:baseline;flex-wrap:wrap}
+.panel h2 small{font-family:var(--f-body);font-weight:400;font-size:12px;color:var(--muted)}
+.row{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
+.btn,.chip{font:inherit;font-size:14px;border-radius:7px;cursor:pointer;border:1px solid var(--line);background:var(--surface);color:var(--ink);padding:8px 12px}
+.btn.pri{background:var(--acc);border-color:var(--acc);color:var(--surface);font-weight:600}
+.btn.warn{border-color:var(--bad);color:var(--bad)}
+.chip{border-radius:999px;padding:5px 11px;font-size:13px}
+.chip[aria-pressed="true"]{border-color:var(--acc);background:var(--acc-soft)}
+.btn:focus-visible,.chip:focus-visible,.tab:focus-visible,select:focus-visible,input:focus-visible{outline:2px solid var(--amber);outline-offset:2px}
+.filebtn{position:relative;overflow:hidden;display:inline-flex;align-items:center}
+.filebtn input{position:absolute;inset:0;opacity:0;cursor:pointer}
+select,input[type=number],input[type=text]{font:inherit;font-size:14px;color:var(--ink);background:var(--surface);border:1px solid var(--line);border-radius:6px;padding:6px 8px;width:100%}
+input[type=range]{width:100%}
+label.f{display:flex;flex-direction:column;gap:3px;font-size:13px;color:var(--muted);min-width:0}
+.fgrid{display:grid;grid-template-columns:repeat(auto-fit,minmax(130px,1fr));gap:10px}
+.refbar{display:flex;justify-content:space-between;align-items:center;width:100%;text-align:left;font:inherit;background:var(--amber-soft);border:1px solid var(--amber);color:var(--ink);border-radius:8px;padding:9px 12px;cursor:pointer}
+.refbar b{color:var(--amber)}
+.viewer{position:relative;background:var(--sunk);border:1px solid var(--line);border-radius:8px;overflow:hidden;touch-action:none}
+.viewer canvas{display:block;width:100%}
+.task{background:var(--acc-soft);border-radius:7px;padding:8px 12px;font-size:14px}
+.task b{color:var(--acc)}
+.muted{color:var(--muted);font-size:13px}
+.kv{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:3px 12px;font-size:14px;margin:0}
+.kv dt{color:var(--muted)} .kv dd{margin:0;font-family:var(--f-mono);text-align:right;font-variant-numeric:tabular-nums}
+.item{border-top:1px solid var(--line);padding-top:10px;margin-top:10px;display:flex;flex-direction:column;gap:8px}
+.item:first-of-type{border-top:0;margin-top:0;padding-top:0}
+.item-h{display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap}
+.item-h b{font-family:var(--f-display);font-weight:600}
+.tag{display:inline-block;font-size:12px;border:1px solid currentColor;border-radius:999px;padding:0 8px;white-space:nowrap}
+.tag.ok{color:var(--ok)} .tag.warn{color:var(--amber)} .tag.bad{color:var(--bad)} .tag.acc{color:var(--acc)}
+.tbl-wrap{overflow-x:auto}
+table{border-collapse:collapse;width:100%;font-size:14px}
+td,th{padding:5px 6px;border-bottom:1px solid var(--line);text-align:left;vertical-align:top}
+th{font-size:12px;color:var(--muted);font-weight:600}
+td.n,th.n{text-align:right;font-family:var(--f-mono);font-variant-numeric:tabular-nums;white-space:nowrap}
+ul.loss{margin:0;padding-left:18px;font-size:14px;display:flex;flex-direction:column;gap:4px}
+ul.loss li span{color:var(--muted);font-size:13px}
+.statrow{display:grid;grid-template-columns:repeat(auto-fit,minmax(110px,1fr));gap:10px}
+.stat{border-left:3px solid var(--acc);padding-left:10px}
+.stat .v{font-family:var(--f-mono);font-size:22px;line-height:1.15;font-variant-numeric:tabular-nums}
+.stat .t{font-size:12px;color:var(--muted)}
+.cam{position:fixed;inset:0;z-index:50;background:#000;display:flex;flex-direction:column}
+.cam video{flex:1;width:100%;min-height:0;object-fit:contain;background:#000}
+.cam-ui{position:absolute;inset:0;pointer-events:none}
+.cam-bottom{display:flex;justify-content:space-around;align-items:center;padding:14px 16px calc(14px + env(safe-area-inset-bottom,0px));background:#000;color:#fff;gap:10px}
+.cam-bottom .btn{background:#222;color:#fff;border-color:#444}
+.shutter{width:68px;height:68px;border-radius:50%;border:4px solid #fff;background:#fff;cursor:pointer}
+.shutter:active{transform:scale(.94)}
+.cam-read{position:absolute;top:calc(env(safe-area-inset-top,0px) + 12px);left:0;right:0;text-align:center;color:#fff;font-family:var(--f-mono);font-size:14px;text-shadow:0 1px 3px #000}
+.hist-item{display:grid;grid-template-columns:64px minmax(0,1fr) auto;gap:10px;align-items:start;border-top:1px solid var(--line);padding-top:10px;margin-top:10px}
+.hist-item img{width:64px;height:64px;object-fit:cover;border-radius:6px;background:var(--sunk)}
+.hist-item:first-child{border-top:0;margin-top:0;padding-top:0}
+.prose{font-size:14px;max-width:70ch}
+.prose p{margin:0 0 8px}
+@media (prefers-reduced-motion:reduce){*{transition:none!important}}
+</style>
+</head>
+<body>
+<div class="bar">
+  <div class="bar-top"><div class="mark" aria-hidden="true"></div><h1>Photo Caliper</h1><span class="muted" id="engine" style="margin-left:auto">…</span></div>
+  <div class="tabs" role="tablist">
+    <button class="tab" role="tab" aria-selected="true" data-tab="measure">วัด</button>
+    <button class="tab" role="tab" aria-selected="false" data-tab="history">ประวัติ</button>
+    <button class="tab" role="tab" aria-selected="false" data-tab="settings">ตั้งค่า</button>
+  </div>
+</div>
+
+<main>
+<!-- ======================= MEASURE ======================= -->
+<section id="tab-measure">
+  <div class="grid">
+    <div class="col sticky">
+      <div class="panel">
+        <div class="row">
+          <button class="btn pri" id="openCam">ถ่ายด้วยกล้อง</button>
+          <span class="btn filebtn">เลือกภาพในเครื่อง<input type="file" id="fileIn" accept="image/*" multiple></span>
+        </div>
+        <div class="row" id="imgChips" style="margin-top:10px"></div>
+        <button class="refbar" id="refBar" style="margin-top:10px"><span>[วัตถุมาตราวัด] <b id="refName">เล็บนิ้วโป้ง 12.0 ± 0.3 มม.</b></span><span>&gt;&gt;</span></button>
+        <div class="panel" id="refPanel" hidden style="margin-top:8px;background:var(--sunk)">
+          <div class="fgrid">
+            <label class="f">ชนิด<select id="refType">
+              <option value="nail">เล็บนิ้วโป้ง (มาตรฐาน)</option>
+              <option value="card">บัตร ID-1 (85.60 × 53.98 มม.)</option>
+              <option value="a4">กระดาษ A4 (297 × 210 มม.)</option>
+              <option value="rect">สี่เหลี่ยมกำหนดเอง</option>
+              <option value="circle">วงกลม (เหรียญ ฝา)</option>
+              <option value="line">ระยะที่รู้ (ไม้บรรทัด)</option>
+            </select></label>
+            <label class="f" id="lA">กว้าง (มม.)<input type="number" id="refA" step="0.01"></label>
+            <label class="f" id="lB">สูง (มม.)<input type="number" id="refB" step="0.01"></label>
+            <label class="f" id="lS">± (มม.)<input type="number" id="refS" step="0.01"></label>
+          </div>
+          <p class="muted" id="refHint" style="margin:8px 0"></p>
+          <div class="row"><button class="btn" id="refPlace">วางจุดมาตราวัดในภาพนี้</button><button class="btn" id="refClear">ล้างจุด</button><button class="chip" id="gyroPlane" aria-pressed="false" hidden>วัตถุวางบนพื้นราบ (ใช้ไจโร)</button></div>
+        </div>
+        <div class="viewer" id="viewer" style="margin-top:10px"><canvas id="cv"></canvas></div>
+        <div class="task" id="task" style="margin-top:10px"></div>
+        <div class="row" style="margin-top:8px;justify-content:space-between">
+          <div class="row">
+            <button class="chip" id="snap" aria-pressed="true">ดูดเข้ามุม/ขอบ</button>
+            <button class="chip" id="undo">ลบจุดล่าสุด</button>
+            <button class="chip" id="done" hidden>จบเส้น</button>
+          </div>
+          <div class="row">
+            <button class="chip" id="zOut" aria-label="ซูมออก">−</button>
+            <button class="chip" id="zIn" aria-label="ซูมเข้า">+</button>
+            <button class="chip" id="zFit">พอดี</button>
+          </div>
+        </div>
+        <div id="segCtl" hidden style="margin-top:10px">
+          <label class="f">ความไวการแยกวัตถุ <span id="tolV"></span><input type="range" id="tol" min="6" max="70" value="24"></label>
+          <p class="muted" style="margin:4px 0 0">ถ้าพื้นที่สีฟ้าเกินวัตถุ ให้ลดค่า ถ้าไม่เต็มวัตถุ ให้เพิ่มค่า หรือแตะซ้ำบนส่วนที่ขาด</p>
+        </div>
+      </div>
+    </div>
+
+    <div class="col">
+      <div class="panel">
+        <h2>เครื่องมือวัด</h2>
+        <div class="row" id="tools"></div>
+        <p class="muted" id="toolHint" style="margin:8px 0 0">วัตถุ 3 มิติ: แตะที่วัตถุครั้งเดียว ระบบแยกขอบ หาแกน และจัดรูปทรงให้เอง</p>
+      </div>
+      <div class="panel" id="outItems"></div>
+      <div class="panel" id="outRef"></div>
+      <div class="panel" id="outLens"></div>
+      <div class="panel" id="outLoss"></div>
+    </div>
+  </div>
+</section>
+
+<!-- ======================= HISTORY ======================= -->
+<section id="tab-history" hidden>
+  <div class="col">
+    <div class="panel">
+      <h2>ประวัติการวัด <small id="histCount"></small></h2>
+      <div class="row"><button class="btn" id="csv">ส่งออก CSV</button><button class="btn" id="csvCopy">คัดลอก CSV</button></div>
+      <p class="muted" style="margin:8px 0 0">เก็บเฉพาะตัวเลขและรูปย่อขนาดเล็กในเครื่องนี้ ภาพเต็มไม่ถูกบันทึก</p>
+    </div>
+    <div class="panel" id="histGroups"></div>
+    <div class="panel" id="histList"></div>
+  </div>
+</section>
+
+<!-- ======================= SETTINGS ======================= -->
+<section id="tab-settings" hidden>
+  <div class="col">
+    <div class="panel">
+      <h2>เล็บมาตราวัด</h2>
+      <div class="fgrid">
+        <label class="f">ความกว้าง (มม.)<input type="number" id="sW" step="0.01"></label>
+        <label class="f">± ความกว้าง (มม.)<input type="number" id="sWsd" step="0.01"></label>
+        <label class="f">ความยาว โคน–ขอบเนื้อ (มม.)<input type="number" id="sL" step="0.01"></label>
+      </div>
+    </div>
+    <div class="panel">
+      <h2>กล้องในแอป</h2>
+      <label class="f">ระยะโฟกัสเลนส์หลัก (เทียบ 35 มม.)<input type="number" id="sF" step="1"></label>
+      <p class="muted" style="margin:6px 0 0">ภาพที่ถ่ายในแอปไม่มี EXIF จึงใช้ค่านี้แทน ค่าเริ่มต้น 27 มม. มาจากภาพที่เคยถ่ายด้วย iQOO Z9 ถ้าเปลี่ยนมือถือให้แก้ค่านี้</p>
+    </div>
+    <div class="panel">
+      <h2>ข้อมูลในเครื่อง</h2>
+      <div class="row"><button class="btn warn" id="wipe">ล้างข้อมูลทั้งหมด</button><span class="muted" id="wipeMsg"></span></div>
+      <p class="muted" style="margin:8px 0 0">ลบประวัติ การตั้งค่า และไฟล์แอปที่เก็บไว้ใช้ออฟไลน์ แล้วโหลดใหม่</p>
+    </div>
+    <div class="panel prose">
+      <h2>วิธีคำนวณ</h2>
+      <p><b>มาตราส่วน</b> จากวัตถุมาตราวัดในภาพเดียวกัน สี่เหลี่ยมใช้ homography จึงแก้มุมเอียงได้ครบ วงกลมบอกมุมเอียงจากวงรี เล็บและไม้บรรทัดให้มาตราส่วนอย่างเดียว ถ้าถ่ายด้วยกล้องในแอปและวัตถุวางบนพื้นราบ ระบบใช้มุมจากไจโรแก้ระนาบให้</p>
+      <p><b>วัตถุ 3 มิติอัตโนมัติ</b> แยกวัตถุจากพื้นหลังด้วยสีและขอบ (คำนวณขอบด้วย WebGPU) หาแกนหลักด้วย PCA วัดความกว้างทีละชั้นตามแกน แล้วเทียบกับทรงกระบอก กรวยตัด และทรงรี ถ้าไม่เข้ากับทรงใด จะใช้ทรงหมุนรอบแกนแบบหั่นชั้น ภาพด้านข้างทำให้รู้หน้าตัดจริงเป็นวงรีในทุกชั้น</p>
+      <p><b>ความคลาดเคลื่อน</b> จำลอง Monte Carlo โดยสุ่มตำแหน่งจุด ขอบวัตถุ ขนาดมาตราวัด ระยะโฟกัส และระยะลึก แล้วรายงาน ±1σ และแหล่งความคลาดหลัก</p>
+      <p><b>ไม่มี AI</b> ระบบไม่รู้ว่าวัตถุในภาพคืออะไร และไม่ส่งภาพออกจากเครื่อง</p>
+    </div>
+  </div>
+</section>
+</main>
+
+<!-- ======================= CAMERA ======================= -->
+<div class="cam" id="cam" hidden>
+  <video id="vid" playsinline muted autoplay></video>
+  <canvas class="cam-ui" id="camUi"></canvas>
+  <div class="cam-read" id="camRead">กำลังเปิดกล้อง…</div>
+  <div class="cam-bottom">
+    <button class="btn" id="camClose">ปิด</button>
+    <button class="shutter" id="shutter" aria-label="ถ่ายภาพ"></button>
+    <button class="btn" id="camMode">เส้นระดับ: ก้มลงพื้น</button>
+  </div>
+</div>
+
+<script src="app.js"></script>
+</body>
+</html>
