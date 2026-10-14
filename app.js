@@ -55,11 +55,12 @@ const store = {
   get(k, d) { try { const v = localStorage.getItem(k); return v ? JSON.parse(v) : d; } catch (e) { return d; } },
   set(k, v) { try { localStorage.setItem(k, JSON.stringify(v)); return true; } catch (e) { return false; } }
 };
-const DEF_SET = { refType: "nail", nail: { w: 12.0, sd: 0.3, len: 8.17, h: 16 }, nailCal: [], myRefs: [], valid: [], rect: { a: 100, b: 100, sd: 0.5 }, circle: { d: 20, sd: 0.1 }, line: { L: 100, sd: 0.5 }, f35app: 27, thumbs: false, libs: { cv: true, sam: true, hands: true }, paper: { a: 297, b: 210 }, coins: { coin1: 20.0, coin5: 24.0, coin10: 26.0 }, coinSd: 0.08 };
+const DEF_SET = { refType: "nail", nail: { w: 12.0, sd: 0.3, len: 8.17, h: 16 }, nailCal: [], myRefs: [], valid: [], rect: { a: 100, b: 100, sd: 0.5 }, circle: { d: 20, sd: 0.1 }, line: { L: 100, sd: 0.5 }, f35app: 27, thumbs: false, libs: { cv: true, sam: true, hands: true }, paper: { a: 297, b: 210 }, coins: { coin1: 20.0, coin2: 21.75, coin5: 24.0, coin10: 26.0 }, coinSd: 0.08 };
 let SET = Object.assign({}, DEF_SET, store.get("pc_set", {}));
 for (const k of ["nail", "libs"]) SET[k] = Object.assign({}, DEF_SET[k], SET[k] || {});
 for (const k of ["nailCal", "myRefs", "valid"]) SET[k] = SET[k] || [];
 for (const k of ["paper", "coins", "coinSd"]) if (SET[k] == null) SET[k] = JSON.parse(JSON.stringify(DEF_SET[k]));
+if (SET.coins.coin2 == null) SET.coins.coin2 = 21.75;
 function saveSet() { store.set("pc_set", SET); }
 
 /* ======================= EXIF ======================= */
@@ -453,6 +454,7 @@ const REF = {
   card: { need: 4, kind: "rect", a: 85.60, b: 53.98, sd: 0.05, name: () => "บัตร ID-1 85.60 × 53.98 มม.", auto: "แตะกลางบัตร 1 ครั้ง ระบบหามุมทั้ง 4" },
   a4grid: { need: 4, kind: "rect", a: 297, b: 210, sd: 0.3, name: () => `A4 ลายตาราง ${fmt(SET.paper.a, 1)} × ${fmt(SET.paper.b, 1)} มม.`, auto: "แตะบนกระดาษ 1 ครั้ง ระบบหาขอบกระดาษและเส้นตารางละเอียดกว่าพิกเซล" },
   coin1: { need: 5, kind: "circle", coin: true, name: () => `เหรียญ 1 บาท ⌀ ${fmt(SET.coins.coin1, 2)} มม.`, auto: "แตะกลางเหรียญ 1 ครั้ง ระบบหาขอบละเอียดกว่าพิกเซลบนภาพต้นฉบับแล้ว fit วงรี" },
+  coin2: { need: 5, kind: "circle", coin: true, name: () => `เหรียญ 2 บาท ⌀ ${fmt(SET.coins.coin2, 2)} มม.`, auto: "แตะกลางเหรียญ 1 ครั้ง ระบบหาขอบละเอียดกว่าพิกเซลบนภาพต้นฉบับแล้ว fit วงรี" },
   coin5: { need: 5, kind: "circle", coin: true, name: () => `เหรียญ 5 บาท ⌀ ${fmt(SET.coins.coin5, 2)} มม.`, auto: "แตะกลางเหรียญ 1 ครั้ง ระบบหาขอบละเอียดกว่าพิกเซลบนภาพต้นฉบับแล้ว fit วงรี" },
   coin10: { need: 5, kind: "circle", coin: true, name: () => `เหรียญ 10 บาท ⌀ ${fmt(SET.coins.coin10, 2)} มม.`, auto: "แตะที่วงนอกสีเงินของเหรียญ 1 ครั้ง ระบบใช้ขอบนอกสุด (ไม่ใช่วงในสีทอง)" },
   a4: { need: 4, kind: "rect", a: 297, b: 210, sd: 0.5, name: () => `A4 เปล่า ${fmt(SET.paper.a, 1)} × ${fmt(SET.paper.b, 1)} มม.`, auto: "แตะกลางกระดาษ 1 ครั้ง ระบบหามุมทั้ง 4" },
@@ -841,7 +843,7 @@ function renderChips() {
   if (S.imgs.length) { const d = document.createElement("button"); d.className = "chip"; d.textContent = "ลบภาพนี้"; d.onclick = () => { const im = curImg(); S.items = S.items.filter(x => x.imgId !== im.id); S.items.forEach(x => { if (x.side && x.side.imgId === im.id) x.side = null; if (x.dsrc && x.dsrc.dolly && x.dsrc.dolly.imgId === im.id) x.dsrc.dolly = null; }); if (im.cvGray) im.cvGray.delete(); S.imgs.splice(S.cur, 1); S.cur = S.imgs.length - 1; setTask(null); renderAll(); }; b.appendChild(d); }
 }
 function renderRefPanel() {
-  const sel = $("refType"); const G = [["แนะนำ", [["a4grid", "A4 ลายตาราง (แม่นสุด · ใช้ 3D หลายมุมได้)"], ["a4", "A4 เปล่า"], ["coin1", `เหรียญ 1 บาท (⌀ ${fmt(SET.coins.coin1, 2)})`], ["coin5", `เหรียญ 5 บาท (⌀ ${fmt(SET.coins.coin5, 2)})`], ["coin10", `เหรียญ 10 บาท (⌀ ${fmt(SET.coins.coin10, 2)})`], ["card", "บัตร ATM/ID-1 (85.60 × 53.98)"]]], ["อื่นๆ (กำหนดขนาดเอง)", [["circle", "วงกลม (ฝา ฯลฯ)"], ["rect", "สี่เหลี่ยม"], ["line", "ระยะที่รู้ (ไม้บรรทัด)"]]], ["สำรอง", [["nail", "เล็บนิ้วโป้ง (±3–8%)"]]]];
+  const sel = $("refType"); const G = [["แนะนำ", [["a4grid", "A4 ลายตาราง (แม่นสุด · ใช้ 3D หลายมุมได้)"], ["a4", "A4 เปล่า"], ["coin1", `เหรียญ 1 บาท (⌀ ${fmt(SET.coins.coin1, 2)})`], ["coin2", `เหรียญ 2 บาท (⌀ ${fmt(SET.coins.coin2, 2)})`], ["coin5", `เหรียญ 5 บาท (⌀ ${fmt(SET.coins.coin5, 2)})`], ["coin10", `เหรียญ 10 บาท (⌀ ${fmt(SET.coins.coin10, 2)})`], ["card", "บัตร ATM/ID-1 (85.60 × 53.98)"]]], ["อื่นๆ (กำหนดขนาดเอง)", [["circle", "วงกลม (ฝา ฯลฯ)"], ["rect", "สี่เหลี่ยม"], ["line", "ระยะที่รู้ (ไม้บรรทัด)"]]], ["สำรอง", [["nail", "เล็บนิ้วโป้ง (±3–8%)"]]]];
   if (SET.myRefs.length) G.push(["ของฉัน", SET.myRefs.map(r => ["mine:" + r.id, r.name + " " + fmt(r.size, 2) + " มม."])]);
   sel.innerHTML = G.map(([g, L]) => `<optgroup label="${esc(g)}">${L.map(([v, t]) => `<option value="${esc(v)}">${esc(t)}</option>`).join("")}</optgroup>`).join(""); sel.value = SET.refType; if (sel.value !== SET.refType) { SET.refType = "nail"; sel.value = "nail"; }
   const t = SET.refType, d = refDef(); $("refName").textContent = d.name(); const show = (id, v) => $(id).hidden = !v;

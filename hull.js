@@ -150,7 +150,8 @@
     const m = new Uint8Array(W * H);
     for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) {
       const i = y * W + x, c = ycc(px, i), q = applyH(Hi, x, y), inP = q[0] >= 0 && q[1] >= 0 && q[0] <= PW && q[1] <= PH;
-      if (inP && q[0] < 17 && q[1] < 17) continue; // orientation mark
+      if (!cfg.noMark && inP && q[0] < 17 && q[1] < 17) continue; // orientation mark
+      if (cfg.excl && cfg.excl.some(c => (q[0] - c[0]) ** 2 + (q[1] - c[1]) ** 2 < (c[2] * 1.25) ** 2)) continue; // coins
       const Yl = Math.max(20, plane[0] + plane[1] * x + plane[2] * y);
       const chroma = Math.abs(c[1] - Cb0) + Math.abs(c[2] - Cr0), dark = (Yl - c[0]) / Yl;
       let ob = chroma > tol || dark > .45;
@@ -372,12 +373,99 @@
   };
 
   /* ---------- whole pipeline ---------- */
+  /* ---------- 4-coin target (10฿ two-colour, 2฿ gold, 5฿ & 1฿ silver) ---------- */
+  function algEllipse(P) { // algebraic conic fit (normalised), returns {cx,cy,a,b,ang}
+    if (P.length < 6) return null; const mx = mean(P.map(p => p[0])), my = mean(P.map(p => p[1])), sc = Math.sqrt(mean(P.map(p => (p[0] - mx) ** 2 + (p[1] - my) ** 2))) || 1;
+    const M = Array.from({ length: 5 }, () => new Array(5).fill(0)), r = new Array(5).fill(0);
+    for (const p0 of P) { const x = (p0[0] - mx) / sc, y = (p0[1] - my) / sc, row = [x * x, x * y, y * y, x, y]; for (let i = 0; i < 5; i++) { r[i] -= row[i]; for (let j = 0; j < 5; j++) M[i][j] += row[i] * row[j]; } }
+    const q = solve(M, r); if (!q) return null; const [A, B, C, D, E] = q, F = 1, det = 4 * A * C - B * B; if (det <= 0) return null;
+    const x0 = (B * E - 2 * C * D) / det, y0 = (B * D - 2 * A * E) / det, F0 = A * x0 * x0 + B * x0 * y0 + C * y0 * y0 + D * x0 + E * y0 + F;
+    let ang = .5 * Math.atan2(B, A - C); const ev = t => A * Math.cos(t) ** 2 + B * Math.cos(t) * Math.sin(t) + C * Math.sin(t) ** 2, e1 = ev(ang), e2 = ev(ang + Math.PI / 2);
+    if (-F0 / e1 <= 0 || -F0 / e2 <= 0) return null; let a = Math.sqrt(-F0 / e1), b = Math.sqrt(-F0 / e2); if (b > a) { [a, b] = [b, a]; ang += Math.PI / 2; }
+    return { cx: mx + x0 * sc, cy: my + y0 * sc, a: a * sc, b: b * sc, ang };
+  }
+  const eP = (e, t) => [e.cx + e.a * Math.cos(t) * Math.cos(e.ang) - e.b * Math.sin(t) * Math.sin(e.ang), e.cy + e.a * Math.cos(t) * Math.sin(e.ang) + e.b * Math.sin(t) * Math.cos(e.ang)];
+  const eRes = (e, p) => { const c = Math.cos(e.ang), s = Math.sin(e.ang), x = (p[0] - e.cx) * c + (p[1] - e.cy) * s, y = -(p[0] - e.cx) * s + (p[1] - e.cy) * c; return Math.hypot(x / e.a, y / e.b) - 1; };
+  HV.detectCoins = function (img) {
+    const { W, H, px } = img, N = W * H, st = []; for (let i = 0; i < N; i += 7) st.push(ycc(px, i));
+    const bg = [median(st.map(c => c[0])), median(st.map(c => c[1])), median(st.map(c => c[2]))];
+    const m = new Uint8Array(N); for (let i = 0; i < N; i++) { const c = ycc(px, i); m[i] = Math.abs(c[0] - bg[0]) * .5 + Math.abs(c[1] - bg[1]) + Math.abs(c[2] - bg[2]) > 28 ? 1 : 0; }
+    const mo = morph(morph(m, W, H, 1, false), W, H, 1, true), lab = new Int32Array(N), q = new Int32Array(N), comps = []; let n = 0;
+    const amin = (Math.min(W, H) * .008) ** 2 * Math.PI, amax = N * .05;
+    for (let s0 = 0; s0 < N; s0++) {
+      if (!mo[s0] || lab[s0]) continue; n++; let qh = 0, qt = 0; q[qt++] = s0; lab[s0] = n;
+      while (qh < qt) { const i = q[qh++], x = i % W, y = (i / W) | 0; for (const j of [x > 0 ? i - 1 : -1, x < W - 1 ? i + 1 : -1, y > 0 ? i - W : -1, y < H - 1 ? i + W : -1]) if (j >= 0 && mo[j] && !lab[j]) { lab[j] = n; q[qt++] = j; } }
+      if (qt < amin || qt > amax) continue; comps.push({ id: n, idx: q.slice(0, qt) });
+    }
+    const cands = [];
+    for (const c of comps) {
+      const bd = []; for (const i of c.idx) { const x = i % W, y = (i / W) | 0; if (x === 0 || y === 0 || x === W - 1 || y === H - 1) { bd.length = 0; break; } if (lab[i - 1] !== c.id || lab[i + 1] !== c.id || lab[i - W] !== c.id || lab[i + W] !== c.id) bd.push([x + .5 * (lab[i + 1] !== c.id) - .5 * (lab[i - 1] !== c.id), y + .5 * (lab[i + W] !== c.id) - .5 * (lab[i - W] !== c.id)]); }
+      if (bd.length < 20) continue; let e = algEllipse(bd); if (!e || e.b / e.a < .25) continue;
+      const fill = c.idx.length / (Math.PI * e.a * e.b), res = Math.sqrt(mean(bd.map(p => eRes(e, p) ** 2))); if (fill < .85 || fill > 1.15 || res > .05) continue;
+      // sub-pixel radial edges
+      const pts = []; for (let k = 0; k < 120; k++) { const t = k / 120 * 2 * Math.PI, p = eP(e, t), dx = p[0] - e.cx, dy = p[1] - e.cy, r = Math.hypot(dx, dy), ux = dx / r, uy = dy / r, g = []; for (let sv = -.18 * r; sv <= .18 * r; sv += .5) { const a1 = ycc(px, clamp(Math.round(p[1] + uy * (sv - .5)), 0, H - 1) * W + clamp(Math.round(p[0] + ux * (sv - .5)), 0, W - 1)), b1 = ycc(px, clamp(Math.round(p[1] + uy * (sv + .5)), 0, H - 1) * W + clamp(Math.round(p[0] + ux * (sv + .5)), 0, W - 1)); g.push([sv, .5 * Math.abs(a1[0] - b1[0]) + Math.abs(a1[1] - b1[1]) + Math.abs(a1[2] - b1[2])]); } let j = 0; for (let z = 1; z < g.length; z++) if (g[z][1] > g[j][1]) j = z; if (j > 0 && j < g.length - 1 && g[j][1] > 10) { const A = g[j - 1][1], B = g[j][1], C = g[j + 1][1], den = A - 2 * B + C, off = den < 0 ? clamp(.5 * (A - C) / den, -.5, .5) * .5 : 0; pts.push([p[0] + ux * (g[j][0] + off), p[1] + uy * (g[j][0] + off)]); } }
+      if (pts.length > 40) { const e2 = algEllipse(pts); if (e2) { const keep = pts.filter(p => Math.abs(eRes(e2, p)) * e2.a < 1.2); e = algEllipse(keep) || e2; } }
+      // colour: inner disc vs outer ring
+      const col = (r0, r1) => { const v = []; for (let k = 0; k < 48; k++) for (const rr of [r0, (r0 + r1) / 2, r1]) { const p = eP({ ...e, a: e.a * rr, b: e.b * rr }, k / 48 * 2 * Math.PI); v.push(ycc(px, clamp(Math.round(p[1]), 0, H - 1) * W + clamp(Math.round(p[0]), 0, W - 1))); } return { g: median(v.map(c => c[2] - c[1])), y: median(v.map(c => c[0])) }; };
+      const inn = col(.05, .4), out = col(.72, .88), gb = bg[2] - bg[1];
+      cands.push({ e, inn, out, fill, res, gIn: inn.g - gb * 0, gOut: out.g });
+    }
+    const gold = c => c.out.g > 18 && c.inn.g > 18, bim = c => c.inn.g - c.out.g > 14 && c.inn.g > 14, silver = c => c.out.g < 12 && c.inn.g < 12;
+    const pick = f => cands.filter(f).sort((a, b) => a.res - b.res);
+    const B10 = pick(bim)[0], G2 = pick(c => gold(c) && !bim(c))[0], S = pick(c => silver(c) && c !== B10 && c !== G2);
+    return { cands, coins: B10 && G2 && S.length >= 2 ? { c10: B10.e, c2: G2.e, s: [S[0].e, S[1].e] } : null, nC: cands.length };
+  };
+  // plane layout (mm) from the most frontal view: remove the common affine tilt using the coin ellipses
+  HV.coinLayout = function (C, D) {
+    // silver pair: the bigger one is 5฿ (frontal view => sizes comparable)
+    const [sa, sb] = C.s[0].a + C.s[0].b > C.s[1].a + C.s[1].b ? [C.s[0], C.s[1]] : [C.s[1], C.s[0]];
+    const L = [["c10", C.c10, D.coin10], ["c2", C.c2, D.coin2], ["c5", sa, D.coin5], ["c1", sb, D.coin1]];
+    let S = [0, 0, 0]; for (const [, e, d] of L) { const r = d / 2, c = Math.cos(e.ang), s = Math.sin(e.ang), a2 = (e.a / r) ** 2, b2 = (e.b / r) ** 2; S[0] += c * c * a2 + s * s * b2; S[1] += c * s * (a2 - b2); S[2] += s * s * a2 + c * c * b2; } S = S.map(v => v / 4);
+    const tr = S[0] + S[2], dt = S[0] * S[2] - S[1] * S[1], sq = Math.sqrt(dt), t = Math.sqrt(tr + 2 * sq), A = [(S[0] + sq) / t, S[1] / t, S[1] / t, (S[2] + sq) / t]; // sqrt of S (px per mm)
+    const id = A[0] * A[3] - A[1] * A[2], Ai = [A[3] / id, -A[1] / id, -A[2] / id, A[0] / id];
+    const pos = {}; for (const [k, e, d] of L) pos[k] = { p: [Ai[0] * e.cx + Ai[1] * e.cy, Ai[2] * e.cx + Ai[3] * e.cy], r: d / 2 };
+    const xs = Object.values(pos).map(v => v.p[0]), ys = Object.values(pos).map(v => v.p[1]), x0 = Math.min(...xs), y0 = Math.min(...ys);
+    for (const k in pos) pos[k].p = [pos[k].p[0] - x0, pos[k].p[1] - y0];
+    const circ = L.map(([, e]) => e.b / e.a); return { pos, w: Math.max(...xs) - x0, h: Math.max(...ys) - y0, frontal: Math.min(...circ) };
+  };
+  function circleImg(Hm, c, r) { const P = []; for (let k = 0; k < 24; k++) { const t = k / 24 * 2 * Math.PI; P.push(applyH(Hm, c[0] + r * Math.cos(t), c[1] + r * Math.sin(t))); } return algEllipse(P); }
+  HV.coinPose = function (C, lay, off) {
+    const best = [];
+    for (const swap of [false, true]) {
+      const [e5, e1] = swap ? [C.s[1], C.s[0]] : [C.s[0], C.s[1]], E = { c10: C.c10, c2: C.c2, c5: e5, c1: e1 }, ks = ["c10", "c2", "c5", "c1"];
+      const src = ks.map(k => [lay.pos[k].p[0] + off, lay.pos[k].p[1] + off]); let obs = ks.map(k => [E[k].cx, E[k].cy]), Hm = homog(src, obs); if (!Hm) continue;
+      for (let it = 0; it < 3; it++) { // ellipse centre != projected circle centre: correct the bias
+        const cor = ks.map((k, i) => { const ei = circleImg(Hm, src[i], lay.pos[k].r), pc = applyH(Hm, src[i][0], src[i][1]); return ei ? [E[k].cx - (ei.cx - pc[0]), E[k].cy - (ei.cy - pc[1])] : obs[i]; });
+        const Hn = homog(src, cor); if (!Hn) break; Hm = Hn;
+      }
+      const sz = ks.map((k, i) => { const ei = circleImg(Hm, src[i], lay.pos[k].r); return ei ? Math.abs(Math.log((ei.a + ei.b) / (E[k].a + E[k].b))) : 9; });
+      best.push({ Hm, err: mean(sz), swap });
+    }
+    best.sort((a, b) => a.err - b.err); return best[0] && best[0].err < .12 ? best[0] : null;
+  };
+  async function runCoins(imgs, cfg, progress) {
+    const views = [];
+    for (let i = 0; i < imgs.length; i++) { progress(`หาเหรียญ ภาพ ${i + 1}/${imgs.length}`); await tick(); const d = HV.detectCoins(imgs[i]); views.push({ img: imgs[i], W: imgs[i].W, H: imgs[i].H, det: d, P: d.coins ? {} : { err: `หาเหรียญครบ 4 ไม่ได้ (เจอวงกลม ${d.nC})` } }); }
+    const okd = views.filter(v => v.det.coins); if (okd.length < 3) return { err: "ภาพที่หาเหรียญครบ 4 เหรียญมีไม่ถึง 3 ภาพ", views };
+    let top = null, bf = 0; for (const v of okd) { const L = HV.coinLayout(v.det.coins, cfg.coins); if (L.frontal > bf) { bf = L.frontal; top = L; } }
+    const off = 60, pw = top.w + 2 * off, ph = top.h + 2 * off;
+    for (const v of okd) { const r = HV.coinPose(v.det.coins, top, off); if (!r) { v.P = { err: "เหรียญไม่ตรงกับตำแหน่งจากภาพด้านบน" }; continue; } const a = applyH(r.Hm, pw / 2, ph / 2), b = applyH(r.Hm, pw / 2 + 1, ph / 2); v.P = { H: r.Hm, corners: [[0, 0], [pw, 0], [pw, ph], [0, ph]].map(p => applyH(r.Hm, p[0], p[1])), markOK: true, grid: 4, rms: r.err * 100, ppm: Math.hypot(b[0] - a[0], b[1] - a[1]) }; }
+    const excl = Object.values(top.pos).map(o => [o.p[0] + off, o.p[1] + off, o.r]);
+    return { views, cfg2: { ...cfg, pw, ph, sp: 30, mg: 0, noMark: true, excl }, frontal: bf };
+  }
   HV.run = async function (imgs, cfg, progress = () => { }) {
+    if (cfg.sheet === "coins") {
+      const r = await runCoins(imgs, cfg, progress); if (r.err) return r; const R = await finishRun(r.views, r.cfg2, progress); if (R.A) R.A.coinFrontal = r.frontal; return R;
+    }
     const views = [];
     for (let i = 0; i < imgs.length; i++) {
       progress(`หากระดาษและตาราง ภาพ ${i + 1}/${imgs.length}`); await tick();
       const P = HV.detectPaper(imgs[i], cfg); views.push({ img: imgs[i], P, W: imgs[i].W, H: imgs[i].H, use: !P.err && imgs[i].use !== false });
     }
+    return finishRun(views, cfg, progress);
+  };
+  async function finishRun(views, cfg, progress) {
+    for (const v of views) if (v.use === undefined) v.use = !v.P.err && !!v.P.H;
     const ok = views.filter(v => v.use && v.P.H); if (ok.length < 3) return { err: "ภาพที่หากระดาษเจอมีไม่ถึง 3 ภาพ", views };
     let f = HV.calibrate(ok.map(v => ({ Hm: v.P.H, W: v.W, H: v.H })));
     const fExif = cfg.fGuess ? cfg.fGuess(ok[0]) : null; let fNote = "คำนวณจากตาราง";

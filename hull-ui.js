@@ -15,7 +15,7 @@
   ids.forEach(k => $(k).addEventListener("change", persist));
   $("hvTol").addEventListener("input", () => { $("hvTolV").textContent = $("hvTol").value; });
   const status = t => { $("hvStatus").textContent = t; };
-  const cfg = () => ({ pw: +$("hvPW").value || 210, ph: +$("hvPH").value || 297, sp: +$("hvSP").value || 30, mg: +$("hvMG").value || 15, mode: $("hvMode").value, noGrid: $("hvSheet").value === "blank", tol: +$("hvTol").value, allowMiss: $("hvAllow").checked ? 1 : 0, zmax: 300 });
+  const cfg = () => ({ pw: +$("hvPW").value || 210, ph: +$("hvPH").value || 297, sp: +$("hvSP").value || 30, mg: +$("hvMG").value || 15, mode: $("hvMode").value, noGrid: $("hvSheet").value === "blank", sheet: $("hvSheet").value, coins: Object.assign({ coin1: 20, coin2: 21.75, coin5: 24, coin10: 26 }, (window.PC && PC.SET && PC.SET.coins) || {}), tol: +$("hvTol").value, allowMiss: $("hvAllow").checked ? 1 : 0, zmax: 300 });
 
   async function addFiles(files) {
     for (const f of files) {
@@ -35,7 +35,7 @@
       if (v && v.P && v.P.corners) { x.strokeStyle = v.P.markOK ? "#5FC484" : "#E9A845"; x.lineWidth = 2; x.beginPath(); v.P.corners.forEach((p, k) => k ? x.lineTo(p[0] * s, p[1] * s) : x.moveTo(p[0] * s, p[1] * s)); x.closePath(); x.stroke(); x.fillStyle = "#F27560"; const p0 = v.P.corners[0]; x.beginPath(); x.arc(p0[0] * s, p0[1] * s, 4, 0, 7); x.fill(); }
       if (!im.use) { x.fillStyle = "rgba(0,0,0,.6)"; x.fillRect(0, 0, tw, th); x.fillStyle = "#fff"; x.font = "bold 14px sans-serif"; x.fillText("ไม่ใช้", 8, 20); }
       const fig = document.createElement("figure"); c.style.width = "100%"; c.style.display = "block"; fig.appendChild(c);
-      const cap = document.createElement("figcaption"); cap.style.cssText = "font-size:11px;padding:2px 4px"; cap.textContent = v ? (v.P.err ? "✗ " + v.P.err : `${cfg().noGrid ? "ขอบกระดาษ" : `ตาราง ${v.P.grid} จุด · ${f1(v.P.rms, 2)} px`}${v.P.markOK ? "" : " · ไม่เห็นเครื่องหมายมุม"}`) : `${i + 1}. ${im.name}`; fig.appendChild(cap);
+      const cap = document.createElement("figcaption"); cap.style.cssText = "font-size:11px;padding:2px 4px"; cap.textContent = v ? (v.P.err ? "✗ " + v.P.err : `${cfg().sheet === "coins" ? `เหรียญ 4 ✓ · ขนาดต่าง ${f1(v.P.rms, 1)}%` : cfg().noGrid ? "ขอบกระดาษ" : `ตาราง ${v.P.grid} จุด · ${f1(v.P.rms, 2)} px`}${v.P.markOK ? "" : " · ไม่เห็นเครื่องหมายมุม"}`) : `${i + 1}. ${im.name}`; fig.appendChild(cap);
       fig.onclick = () => { im.use = !im.use; drawThumbs(); status(im.use ? "ใช้ภาพนี้" : "ไม่ใช้ภาพนี้ · กดคำนวณใหม่"); };
       box.appendChild(fig);
     });
@@ -54,7 +54,7 @@
   function warnings() {
     const w = [], vs = (R && R.views || []).filter(Boolean);
     const noMark = vs.filter(v => v.P && !v.P.err && !v.P.markOK).length; if (noMark) w.push(`${noMark} ภาพไม่เห็นสี่เหลี่ยมทึบที่มุม ทิศของกระดาษอาจสลับ ทำให้รูปทรงผิด`);
-    const badRms = vs.filter(v => v.P && v.P.rms > 1.5).length; if (cfg().noGrid) w.push("ใช้ A4 เปล่า: มุมกล้องมาจากขอบกระดาษ 4 มุมเท่านั้น ค่าจะคลาดมากกว่าแบบตารางเล็กน้อย"); if (badRms) w.push(`${badRms} ภาพหาเส้นตารางได้ไม่แม่น (> 1.5 px) ควรถ่ายให้กระดาษใหญ่ขึ้นหรือคมขึ้น`);
+    const coinsMode = cfg().sheet === "coins"; const badRms = coinsMode ? 0 : vs.filter(v => v.P && v.P.rms > 1.5).length; if (coinsMode) { w.push("ใช้เหรียญ 4 เหรียญ: มุมกล้องมาจากจุดกลางเหรียญ 4 จุด (ทดสอบภาพจำลอง: รอบวง +4%, ปริมาตร +7%)"); if (A.coinFrontal < .97) w.push(`ไม่มีภาพที่ถ่ายตรงจากด้านบนพอ (วงกลมที่กลมที่สุด ${f1(A.coinFrontal * 100, 0)}%) ตำแหน่งเหรียญอาจคลาด ควรมีภาพตรงลงมา 1 ภาพ`); } if (cfg().noGrid) w.push("ใช้ A4 เปล่า: มุมกล้องมาจากขอบกระดาษ 4 มุมเท่านั้น ค่าจะคลาดมากกว่าแบบตารางเล็กน้อย"); if (badRms) w.push(`${badRms} ภาพหาเส้นตารางได้ไม่แม่น (> 1.5 px) ควรถ่ายให้กระดาษใหญ่ขึ้นหรือคมขึ้น`);
     const touch = vs.filter(v => v.sil && v.sil.touch).length; if (touch) w.push(`${touch} ภาพเงาวัตถุชนขอบภาพ`);
     if (A.nViews < 6) w.push("ใช้น้อยกว่า 6 ภาพ ค่าเส้นรอบวงและปริมาตรจะเกินจริงมากขึ้น");
     if (A.fNote !== "คำนวณจากตาราง") w.push("คำนวณทางยาวโฟกัสจากตารางไม่ได้ ความสูงอาจคลาดมาก ถ่ายให้เอียงหลายแบบมากขึ้น");
