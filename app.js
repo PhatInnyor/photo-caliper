@@ -726,6 +726,7 @@ function qualityWarnings(im, md) {
     const r = Math.hypot(md.c0.x - im.W / 2, md.c0.y - im.H / 2) / (Math.hypot(im.W, im.H) / 2); if (r > .7) w.push(["มาตราวัดอยู่ใกล้ขอบภาพ", "เลนส์บิดมากที่ขอบ ควรวางมาตราวัดและวัตถุใกล้กลางภาพ"]);
     if (md.Z < 250) w.push(["ถ่ายใกล้มาก", `ระยะ ~${fmt(md.Z / 10, 0)} ซม. ถ้าวัตถุกับมาตราวัดต่างระยะ 1 ซม. ค่าจะเพี้ยน ${fmt(10 / md.Z * 100, 1)}% ถ่ายไกลขึ้นแล้วซูมจะช่วยได้`]);
     if (im.refFit && md.def.kind === "circle") { const f = im.refFit; w.push(["ขอบวงกลม (fit วงรี)", `RMS ${fmt(f.rms, 2)} px · ใช้จุดขอบ ${fmt(f.inl * 100, 0)}% · เอียง ${fmt(f.tilt, 0)}°`]); if (f.tilt > 30) w.push(["เหรียญเอียงมาก", "ผนังข้างเหรียญ (หนา ~1.5 มม.) อาจรวมในขอบ ทำให้แกนยาวเกิน ~0.5–2% ถ่ายตรงลงมามากขึ้น"]); if (f.rms > .6) w.push(["ขอบเหรียญไม่คม", "แสงสะท้อนหรือภาพเบลอ ใช้แสงนุ่มและพื้นสีตัดกับเหรียญ"]); }
+    if (md.multi) { const m = md.multi, nm = { coin1: "1฿", coin2: "2฿", coin5: "5฿", coin10: "10฿" }; w.push(["หลายเหรียญ", `${m.n} เหรียญ · ${m.list.map(c => `${nm[c.t] || c.t} ${c.r >= 1 ? "+" : ""}${fmt((c.r - 1) * 100, 1)}%`).join(" · ")} · ใช้ค่าเฉลี่ยถ่วงน้ำหนัก ±${fmt(md.relRef * 100, 2)}%`]); if (m.spread > .015) w.push(["สเกลจากแต่ละเหรียญต่างกัน", `±${fmt(m.spread * 100, 1)}% · เหรียญอาจอยู่คนละระยะจากกล้อง (Δ) หรือภาพเอียง ค่าที่วัดใกล้เหรียญไหนจะตรงกับเหรียญนั้นมากกว่า`]); }
     if (md.def.kind === "circle" && !im.refFit && md.def.coin) w.push(["ไม่ได้ fit ขอบละเอียด", "ใช้ขอบจากการตัดภาพ (หยาบกว่า) · ลองแตะกลางเหรียญอีกครั้ง"]);
     if (im.paperFit && im.paperFit.grid) w.push(["เส้นตาราง", `ใช้ ${im.paperFit.grid} จุดตัด · RMS ${fmt(im.paperFit.rms, 2)} px`]);
     if (md.check && Math.abs(md.check.ratio - 1) > .12) w.push(["สัดส่วนเล็บไม่ตรงค่าที่ตั้งไว้", `ต่าง ${fmt((md.check.ratio - 1) * 100, 0)}% เล็บอาจเอียงจากหน้ากล้อง หรือค่าเล็บในตั้งค่าคลาด`]);
@@ -735,17 +736,25 @@ function qualityWarnings(im, md) {
 function imgModel(im) {
   if (!im) return null; const def = refDef();
   if (im.refPts.length < def.need) return { err: `ยังไม่มีมาตราวัดในภาพนี้ · ${def.auto}` };
-  const sz = refSize(); const P = im.refPts.slice(0, def.kind === "line" ? 2 : def.need);
+  let sz = refSize(); const P = im.refPts.slice(0, def.kind === "line" ? 2 : def.need);
   const lens0 = lensInfo(im); const fGuess = lens0.fpx || 26 * Math.hypot(im.W, im.H) / 43.27;
-  const M = buildMapper(im, P, sz, { f: fGuess }); if (!M) return { err: "คำนวณจากมาตราวัดไม่ได้ ลองวางใหม่" };
+  let M = buildMapper(im, P, sz, { f: fGuess }); if (!M) return { err: "คำนวณจากมาตราวัดไม่ได้ ลองวางใหม่" };
   const cam = cameraModel(im, P, M);
   const c0 = def.kind === "rect" ? mid(mid(P[0], P[1]), mid(P[2], P[3])) : def.kind === "circle" ? { x: M.ell.cx, y: M.ell.cy } : mid(P[0], P[1]);
   const s0 = M.sIso(c0), Z = cam.f * s0; const refPx = def.kind === "circle" ? 2 * M.ell.a : dist(P[0], P[1]);
   const lineage = def.mine ? (def.mine.sd / def.mine.size) : 0;
   const refPxEff = im.refPts[0].snapped === "full" ? refPx / im.k : refPx;
-  const relRef = hyp(sz.sd / sz.a, (im.refPts[0].snapped ? 0.8 : 1.5) * Math.SQRT2 / refPxEff);
+  let relRef = hyp(sz.sd / sz.a, (im.refPts[0].snapped ? 0.8 : 1.5) * Math.SQRT2 / refPxEff), multi = null;
+  if (def.coin && im.extraCoins && im.extraCoins.length) { // several coins: inverse-variance mean of the per-coin scales
+    const k = im.k || 1, L = [{ t: SET.refType, D: sz.a, a: M.ell.a, rms: im.refFit ? im.refFit.rms : 1 }, ...im.extraCoins.map(c => ({ t: c.type, D: SET.coins[c.type], a: c.e.a, rms: c.fit ? c.fit.rms : 1 }))];
+    const s0 = sz.a / (2 * L[0].a); let sw = 0, sr = 0; const rs = [];
+    for (const c of L) { const r = c.D / (2 * c.a) / s0, rel = hyp(SET.coinSd / c.D, Math.max(.3, c.rms) / (c.a / k) / 2), w = 1 / rel ** 2; c.r = r; c.rel = rel; sw += w; sr += w * r; rs.push(r); }
+    const R = sr / sw, spread = sdOf(rs) || 0; multi = { n: L.length, R, spread, list: L };
+    sz = { ...sz, a: sz.a * R }; relRef = hyp(1 / Math.sqrt(sw), spread / Math.sqrt(L.length));
+    M = buildMapper(im, P, sz, { f: fGuess }) || M;
+  }
   let check = null; if (SET.refType === "nail" && im.refPts.length >= 4) { const meas = dist(im.refPts[2], im.refPts[3]) / dist(im.refPts[0], im.refPts[1]), exp = SET.nail.len / SET.nail.w; check = { meas, exp, ratio: meas / exp }; }
-  return { M, cam, P, sz, c0, s0, Z, refPx, refPxEff, relRef, check, def, lineage };
+  return { M, cam, P, sz, c0, s0, Z, refPx, refPxEff, relRef, check, def, lineage, multi };
 }
 function evaluateAll() {
   for (const im of S.imgs) { im.model = imgModel(im); im.warn = qualityWarnings(im, im.model && !im.model.err ? im.model : null); }
@@ -796,6 +805,7 @@ function taskHtml(t) {
   if (t.type === "item" && (t.item.tool === "obj" || t.item.tool === "area")) { const it = t.item, T = TOOLS[it.tool]; const m = S.msg ? `<div class="warn">${esc(S.msg)}</div>` : ""; S.msg = null; const mv = it.tool === "obj" ? `<div class="muted">รอบวง/ปริมาตรจากภาพเดียวคลาดได้ ±10–20% · ถ้าต้องการแม่น ใช้แท็บ 3D → วัดจากเงาหลายมุม + A4</div>` : ""; const sam = LIB.sam.state === "ok" ? "" : `<div class="warn">SAM ${({ off: "ปิดอยู่", loading: "กำลังโหลด (~40 MB ครั้งแรก)", fail: "โหลดไม่ได้" })[LIB.sam.state]} — ใช้ตัวแยกแบบสี/ขอบ ซึ่งลามง่ายกับวัตถุใสหรือสีใกล้พื้นหลัง ${LIB.sam.state !== "loading" ? '<button class="chip" onclick="PC.retrySAM()">ลองโหลด SAM ใหม่</button>' : ""}</div>`; return (t.side ? `<b>#${it.id} ภาพด้านข้าง</b> · แตะที่วัตถุเดียวกันในภาพนี้` : `<b>#${it.id} ${T.n}</b> · ${T.hint}`) + m + mv + sam; }
   if (t.type === "item") { const it = t.item, T = TOOLS[it.tool]; return it.tool === "obj" && t.side ? `<b>#${it.id} ภาพด้านข้าง</b> · แตะที่วัตถุเดียวกันในภาพนี้` : `<b>#${it.id} ${T.n}</b> · ${T.hint}`; }
   if (t.type === "dolly") return `<b>#${t.item.id} ถอยกล้อง (ภาพที่ 2)</b> · ${t.item.tool === "obj" ? "แตะที่วัตถุเดียวกัน" : "แตะปลายทั้งสองของสิ่งเดียวกัน"} ในภาพนี้`;
+  if (t.type === "coin") return `<b>เพิ่มเหรียญ ${({ coin1: "1", coin2: "2", coin5: "5", coin10: "10" })[t.ctype]} บาท</b> · แตะกลางเหรียญอีกเหรียญ${t.ctype === "coin10" ? " (แตะวงนอกสีเงิน)" : ""}`;
   if (t.type === "contact") return `<b>#${t.item.id} จุดแตะพื้น</b> · แตะจุดที่วัตถุแตะพื้นหรือโต๊ะ (เช่น ขอบล่างของก้นขวดที่หันเข้ากล้อง)`;
   return "";
 }
@@ -847,7 +857,7 @@ function renderRefPanel() {
   if (SET.myRefs.length) G.push(["ของฉัน", SET.myRefs.map(r => ["mine:" + r.id, r.name + " " + fmt(r.size, 2) + " มม."])]);
   sel.innerHTML = G.map(([g, L]) => `<optgroup label="${esc(g)}">${L.map(([v, t]) => `<option value="${esc(v)}">${esc(t)}</option>`).join("")}</optgroup>`).join(""); sel.value = SET.refType; if (sel.value !== SET.refType) { SET.refType = "nail"; sel.value = "nail"; }
   const t = SET.refType, d = refDef(); $("refName").textContent = d.name(); const show = (id, v) => $(id).hidden = !v;
-  const coin = !!(REF[t] && REF[t].coin), paper = t === "a4" || t === "a4grid";
+  const coin = !!(REF[t] && REF[t].coin), paper = t === "a4" || t === "a4grid"; $("coinRow").hidden = !coin;
   show("lA", t === "rect" || t === "circle" || t === "line" || coin || paper); show("lB", t === "rect" || paper); show("lS", t === "rect" || t === "circle" || t === "line" || coin);
   $("lA").firstChild.textContent = t === "circle" || coin ? "เส้นผ่านศูนย์กลาง (มม.)" : t === "line" ? "ความยาว (มม.)" : paper ? "ด้านยาวที่วัดจริง (มม.)" : "กว้าง (มม.)";
   $("lB").firstChild.textContent = paper ? "ด้านสั้นที่วัดจริง (มม.)" : "สูง (มม.)";
@@ -991,6 +1001,7 @@ function draw() {
   if (kind === "rect") path(R, amb, R.length === 4, 2.4); else if (kind === "line") { path(R.slice(0, 2), amb, false, 2.4); if (R.length >= 4) path(R.slice(2, 4), amb, false, 1.6); }
   else if (kind === "circle" && R.length >= 5) { const e = fitEllipse(R); if (e) { vx.strokeStyle = amb; vx.lineWidth = 2.4 * u; vx.beginPath(); vx.ellipse(e.cx, e.cy, e.a, e.b, e.ang, 0, 7); vx.stroke(); } }
   R.forEach((p, i) => { dot(p, amb, 5); label(p, String(i + 1), amb); });
+  (im.extraCoins || []).forEach(c => { vx.strokeStyle = amb; vx.lineWidth = 2 * u; vx.beginPath(); vx.ellipse(c.e.cx, c.e.cy, c.e.a, c.e.b, c.e.ang, 0, 7); vx.stroke(); label({ x: c.e.cx + c.e.a, y: c.e.cy }, "+" + ({ coin1: "1฿", coin2: "2฿", coin5: "5฿", coin10: "10฿" })[c.type], amb); });
   for (const it of S.items) {
     const isSide = it.side && it.side.imgId === im.id, dl = it.dsrc && it.dsrc.dolly, isDolly = dl && dl.imgId === im.id;
     if (it.dsrc && it.dsrc.contact && it.dsrc.contact.pt && it.imgId === im.id) { dot(it.dsrc.contact.pt, bad, 5); label(it.dsrc.contact.pt, `#${it.id} แตะพื้น`, bad); }
@@ -1017,6 +1028,13 @@ function evPos(e) { const b = cv.getBoundingClientRect(), k = cv.width / b.width
 function editable(im) { const L = [...im.refPts]; S.items.forEach(i => { if (i.imgId === im.id && i.pts) L.push(...i.pts); const dl = i.dsrc && i.dsrc.dolly; if (dl && dl.imgId === im.id && dl.pts) L.push(...dl.pts); if (i.dsrc && i.dsrc.contact && i.dsrc.contact.pt && i.imgId === im.id) L.push(i.dsrc.contact.pt); }); return L; }
 async function tapAction(im, ip) {
   const t = S.task;
+  if (t && t.type === "coin") {
+    if (t.img !== im) return; setBusy("กำลัง fit ขอบเหรียญ…"); await new Promise(r => setTimeout(r, 20));
+    const seg = await segment(im, [ip], [], 26, "best"); let e = seg && seg.area > 80 && !seg.touches ? ellipseFromMask(im, seg.mask) : null, fit = null;
+    if (e) { fit = await refineEllipseFull(im, e, t.ctype === "coin10"); if (fit) e = fit.e; }
+    setBusy(null); if (!e) { $("fsTask").innerHTML = $("task").innerHTML = "<b>หาเหรียญไม่เจอ</b> · แตะกลางเหรียญอีกครั้ง"; return; }
+    (im.extraCoins = im.extraCoins || []).push({ type: t.ctype, e, fit }); setTask(null); renderAll(); return;
+  }
   if (t && t.type === "item" && (t.item.tool === "obj" || t.item.tool === "area")) { const it = t.item, tgt = t.side ? it.side : it; if (tgt.imgId === im.id) { if (S.negMode) (tgt.neg = tgt.neg || []).push(ip); else tgt.seeds.push(ip); return runSeg(it, !!t.side); } }
   if (t && t.type === "dolly") { const it = t.item, dl = it.dsrc.dolly; if (dl.imgId !== im.id) return; if (it.tool === "obj") { if (S.negMode) dl.neg.push(ip); else dl.seeds.push(ip); return runDollySeg(it); } if (dl.pts.length < 2) { dl.pts.push(snapPoint(im, ip)); if (dl.pts.length === 2) setTask(null); renderAll(); } return; }
   if (t && t.type === "contact") { const it = t.item; if (it.imgId !== im.id) return; it.dsrc.contact = { pt: { x: ip.x, y: ip.y } }; it.dOpen = true; setTask(null); renderAll(); return; }
@@ -1085,9 +1103,11 @@ $("tol").onchange = () => { const t = S.task; if (!t || !t.item) return; const i
   }
 })();
 $("refBar").onclick = () => { $("refPanel").hidden = !$("refPanel").hidden; };
-$("refType").onchange = () => { SET.refType = $("refType").value; saveSet(); for (const im of S.imgs) { im.refPts = []; im.refAuto = null; } const im = curImg(); if (im) setTask({ type: "ref", img: im }); renderAll(); };
+$("refType").onchange = () => { SET.refType = $("refType").value; saveSet(); for (const im of S.imgs) { im.refPts = []; im.refAuto = null; im.extraCoins = []; } const im = curImg(); if (im) setTask({ type: "ref", img: im }); renderAll(); };
 ["refA", "refB", "refS"].forEach(id => $(id).addEventListener("change", () => { const t = SET.refType, a = parseFloat($("refA").value), b = parseFloat($("refB").value), s = parseFloat($("refS").value); if (REF[t] && REF[t].coin) { SET.coins[t] = a || SET.coins[t]; if (s >= 0) SET.coinSd = s; } if (t === "a4" || t === "a4grid") SET.paper = { a: a || 297, b: b || 210 }; if (t === "rect") SET.rect = { a: a || 100, b: b || 100, sd: s >= 0 ? s : .5 }; if (t === "circle") SET.circle = { d: a || 20, sd: s >= 0 ? s : .1 }; if (t === "line") SET.line = { L: a || 100, sd: s >= 0 ? s : .5 }; saveSet(); renderAll(); }));
-$("refPlace").onclick = () => { const im = curImg(); if (im) { im.refPts = []; im.refAuto = null; setTask({ type: "ref", img: im }); renderAll(); openFs(); } };
+$("coinAdd").onclick = () => { const im = curImg(); if (!im || im.refPts.length < 5) { $("task").innerHTML = "วางเหรียญหลักก่อน แล้วค่อยเพิ่มเหรียญ"; return; } setTask({ type: "coin", img: im, ctype: $("coinAddType").value }); openFs(); };
+$("coinClear").onclick = () => { const im = curImg(); if (im) { im.extraCoins = []; renderAll(); } };
+$("refPlace").onclick = () => { const im = curImg(); if (im) { im.extraCoins = []; im.refPts = []; im.refAuto = null; setTask({ type: "ref", img: im }); renderAll(); openFs(); } };
 $("refAuto").onclick = async () => { const im = curImg(); if (!im) return; if (SET.refType !== "nail") { setTask({ type: "ref", img: im }); openFs(); return; } setBusy("กำลังหาเล็บอัตโนมัติ…"); const ok = await autoNail(im, null); setBusy(null); if (!ok) { im.refPts = []; setTask({ type: "ref", img: im }); openFs(); } else setTask(null); renderAll(); };
 $("gyroPlane").onclick = () => { const im = curImg(); if (im) { im.gyroPlane = !im.gyroPlane; renderAll(); } };
 
