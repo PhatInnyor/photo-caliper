@@ -1250,6 +1250,8 @@ document.querySelectorAll(".tab").forEach(b => b.onclick = () => {
 });
 
 /* ======================= API for mode3d.js ======================= */
+const APP_VERSION = "v9 · 2026-10-14";
+window.addEventListener("load", () => { const v = document.getElementById("appVer"); if (v) v.textContent = APP_VERSION; const b = document.getElementById("forceUpd"); if (b) b.onclick = async () => { b.disabled = true; b.textContent = "กำลังอัปเดต…"; try { const ks = await caches.keys(); await Promise.all(ks.map(k => caches.delete(k))); const rs = await navigator.serviceWorker.getRegistrations(); await Promise.all(rs.map(r => r.unregister())); } catch (e) { } location.reload(); }; });
 window.PC = {
   S, SET, saveSet, fmt, esc, mean, sdOf, rn, hyp, download, makeImg, autoNail, autoRef, refDef, refSize, imgModel, lensInfo, sharpness, TOOLS, SHAPE_N, LIB,
   retrySAM() { SET.libs.sam = true; saveSet(); LIB.sam.state = "off"; loadSAM().then(() => { setTask(S.task); renderAll(); }); setTask(S.task); },
@@ -1262,6 +1264,12 @@ window.PC = {
   $("tolV").textContent = $("tol").value; renderSettings();
   await initGPU(); $("engine").textContent = G.state;
   setTask(null); renderAll();
-  if ("serviceWorker" in navigator && location.protocol === "https:") { try { await navigator.serviceWorker.register("sw.js"); } catch (e) { } }
+  if ("serviceWorker" in navigator && location.protocol === "https:") {
+    try {
+      const had = !!navigator.serviceWorker.controller; let reloaded = false;
+      navigator.serviceWorker.addEventListener("controllerchange", () => { if (had && !reloaded) { reloaded = true; location.reload(); } });
+      const reg = await navigator.serviceWorker.register("sw.js", { updateViaCache: "none" }); reg.update();
+    } catch (e) { }
+  }
   loadCV(); loadSAM(); loadHands();
 })();
