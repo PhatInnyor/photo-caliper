@@ -448,6 +448,81 @@ async function refineEllipseFull(im, e0, outer) {
   } catch (err) { console.warn("refineEllipseFull", err); return null; }
 }
 
+/* ======================= automatic coin search (gradient Hough) ======================= */
+const COIN_NAME = { coin1: "1฿", coin2: "2฿", coin5: "5฿", coin10: "10฿" };
+function houghCoins(im, rmin, rmax, box) {
+  const { W, H, px } = im, x0 = Math.max(1, box ? Math.floor(box[0]) : 1), y0 = Math.max(1, box ? Math.floor(box[1]) : 1), x1 = Math.min(W - 2, box ? Math.ceil(box[2]) : W - 2), y1 = Math.min(H - 2, box ? Math.ceil(box[3]) : H - 2);
+  const L = i => .299 * px[i * 4] + .587 * px[i * 4 + 1] + .114 * px[i * 4 + 2], E = [];
+  let sum = 0, sum2 = 0, n = 0; const G = [], GX = new Float32Array(W * H), GY = new Float32Array(W * H);
+  for (let y = y0; y <= y1; y++) for (let x = x0; x <= x1; x++) { const i = y * W + x, gx = L(i - W + 1) + 2 * L(i + 1) + L(i + W + 1) - L(i - W - 1) - 2 * L(i - 1) - L(i + W - 1), gy = L(i + W - 1) + 2 * L(i + W) + L(i + W + 1) - L(i - W - 1) - 2 * L(i - W) - L(i - W + 1), m = Math.hypot(gx, gy); GX[i] = gx; GY[i] = gy; G.push([x, y, gx, gy, m]); sum += m; sum2 += m * m; n++; }
+  const hs = new Uint32Array(1025); for (const g of G) hs[Math.min(1024, g[4] | 0)]++; let thr = 40, cum = 0; for (let v = 1024; v >= 0; v--) { cum += hs[v]; if (cum > n * .12) { thr = Math.max(30, Math.min(thr, v)); break; } }
+  for (const [x, y, gx, gy, m] of G) if (m >= thr) E.push([x, y, gx / m, gy / m]);
+  // candidates: multi-scale blob detection (difference of box-blurred images) — coin-sized discs respond, fine texture averages out
+  const f = Math.max(1, Math.floor(rmin / 5)), w = Math.floor(W / f), h = Math.floor(H / f), Yd = new Float32Array(w * h);
+  for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) { let s0 = 0; for (let dy = 0; dy < f; dy++) for (let dx = 0; dx < f; dx++) s0 += L((y * f + dy) * W + x * f + dx); Yd[y * w + x] = s0 / (f * f); }
+  const boxBlur = (src, r) => { r = Math.max(1, Math.round(r)); let a = src, b = new Float32Array(w * h); for (let pass = 0; pass < 3; pass++) { const t = new Float32Array(w * h); for (let y = 0; y < h; y++) { let acc2 = 0; for (let x = -r; x <= r; x++) acc2 += a[y * w + Math.min(w - 1, Math.max(0, x))]; for (let x = 0; x < w; x++) { t[y * w + x] = acc2 / (2 * r + 1); acc2 += a[y * w + Math.min(w - 1, x + r + 1)] - a[y * w + Math.max(0, x - r)]; } } for (let x = 0; x < w; x++) { let acc2 = 0; for (let y = -r; y <= r; y++) acc2 += t[Math.min(h - 1, Math.max(0, y)) * w + x]; for (let y = 0; y < h; y++) { b[y * w + x] = acc2 / (2 * r + 1); acc2 += t[Math.min(h - 1, y + r + 1) * w + x] - t[Math.max(0, y - r) * w + x]; } } a = b; b = new Float32Array(w * h); } return a; };
+  const peaks = [];
+  for (let R = rmin; R <= rmax * 1.01; R *= 1.25) {
+    const A1 = boxBlur(Yd, R / f * .3), A2 = boxBlur(Yd, R / f * 1.5), D = new Float32Array(w * h); for (let i = 0; i < w * h; i++) D[i] = Math.abs(A1[i] - A2[i]);
+    const m = Math.max(2, Math.round(R / f * .3)), loc = [];
+    for (let y = m; y < h - m; y++) for (let x = m; x < w - m; x++) { const v = D[y * w + x]; if (v < 8) continue; const X = x * f, Yy = y * f; if (X < x0 || Yy < y0 || X > x1 || Yy > y1) continue; let mx = true; for (let dy = -m; dy <= m && mx; dy++) for (let dx = -m; dx <= m; dx++) if (D[(y + dy) * w + x + dx] > v) { mx = false; break; } if (mx) loc.push({ x: X + f / 2, y: Yy + f / 2, r: R, v }); }
+    loc.sort((a, b) => b.v - a.v); peaks.push(...loc.slice(0, 400));
+  }
+  const EM = new Map(); for (const e of E) EM.set(e[1] * W + e[0], e);
+  const rayHist = (cx, cy) => { const h = new Float32Array(rmax + 3); for (let k = 0; k < 90; k++) { const t = k / 90 * 2 * Math.PI, ux = Math.cos(t), uy = Math.sin(t); for (let d = rmin; d <= rmax; d++) { const e = EM.get(Math.round(cy + uy * d) * W + Math.round(cx + ux * d)); if (e && Math.abs(e[2] * ux + e[3] * uy) > .7) h[d]++; } } let br = rmin, bv = -1; for (let r = rmin + 1; r < rmax; r++) { const v = (h[r - 1] + h[r] + h[r + 1]) / 90; if (v > bv) { bv = v; br = r; } } return br; };
+  const resid = (el, p) => { const c = Math.cos(el.ang), s = Math.sin(el.ang), xx = (p.x - el.cx) * c + (p.y - el.cy) * s, yy = -(p.x - el.cx) * s + (p.y - el.cy) * c; return Math.abs(Math.hypot(xx / el.a, yy / el.b) - 1) * el.a; };
+  const cover = (cx, cy, r) => { // RANSAC ellipse over all radial-edge peaks along 72 rays (robust to texture)
+    const A = []; for (let k = 0; k < 72; k++) { const t = k / 72 * 2 * Math.PI, ux = Math.cos(t), uy = Math.sin(t), g = [], L = []; for (let d = Math.round(r * .65); d <= Math.round(r * 1.35); d++) { const x = Math.round(cx + ux * d), y = Math.round(cy + uy * d); if (x < 1 || y < 1 || x >= W - 1 || y >= H - 1) { g.push(0); continue; } const i = y * W + x, v = Math.abs(GX[i] * ux + GY[i] * uy); g.push(v > .6 * Math.hypot(GX[i], GY[i]) ? v : 0); L.push({ x, y }); } const pk = []; for (let j = 1; j < g.length - 1; j++) if (g[j] > 25 && g[j] >= g[j - 1] && g[j] >= g[j + 1]) { const d = Math.round(r * .65) + j; pk.push({ x: cx + ux * d, y: cy + uy * d }); } A.push(pk); }
+    const nonEmpty = A.filter(a => a.length); if (nonEmpty.length < 36) return { cov: 0 };
+    let best = null, bc = 0; for (let it = 0; it < 70; it++) { const smp = []; for (let q = 0; q < 6; q++) { const a = nonEmpty[(Math.random() * nonEmpty.length) | 0]; smp.push(a[(Math.random() * a.length) | 0]); } const el = fitEllipse(smp); if (!el || el.b / el.a < .3 || el.a > r * 1.5 || el.b < r * .5) continue; let c = 0; for (const a of A) if (a.some(p => resid(el, p) < 1.6)) c++; if (c > bc) { bc = c; best = el; } }
+    if (!best) return { cov: 0 }; const inl = []; for (const a of A) { let bp = null, bd = 1.6; for (const p of a) { const d = resid(best, p); if (d < bd) { bd = d; bp = p; } } if (bp) inl.push(bp); } const el = fitEllipse(inl) || best; let ok = 0; for (const a of A) if (a.some(p => resid(el, p) < 1.6)) ok++; return { cov: ok / 72, el }; };
+  const out = []; for (const p of peaks) { const r = p.r, c = cover(p.x, p.y, r); if (c.cov > .7) out.push({ x: c.el.cx, y: c.el.cy, r: (c.el.a + c.el.b) / 2, cov: c.cov, el: c.el }); }
+  out.sort((a, b) => b.cov - a.cov); const fin = []; for (const o of out) if (!fin.some(f => Math.hypot(f.x - o.x, f.y - o.y) < Math.max(f.r, o.r) * .8)) fin.push(o);
+  return fin.slice(0, 20);
+}
+function coinColour(im, e) {
+  const col = (r0, r1) => { const v = []; for (let k = 0; k < 48; k++) for (const rr of [r0, (r0 + r1) / 2, r1]) { const p = ellPt({ ...e, a: e.a * rr, b: e.b * rr }, k / 48 * 2 * Math.PI); const c = ycc(im.px, clamp(Math.round(p.y), 0, im.H - 1) * im.W + clamp(Math.round(p.x), 0, im.W - 1)); v.push(c[2] - c[1]); } v.sort((a, b) => a - b); return v[v.length >> 1]; };
+  const gi = col(.05, .4), go = col(.72, .88);
+  return gi - go > 14 && gi > 14 ? "bim" : go > 18 && gi > 18 ? "gold" : "silver";
+}
+// find coins in one image; anchor = {type, e} of a known coin (optional)
+async function findCoins(im, anchor, near) {
+  const md = Math.min(im.W, im.H), r0 = anchor ? anchor.e.a : null;
+  const rmin = Math.max(5, Math.round(r0 ? r0 * .6 : md * .02)), rmax = Math.round(r0 ? r0 * 1.6 : md * .15);
+  const box = near ? [near.x - rmax * 2.5, near.y - rmax * 2.5, near.x + rmax * 2.5, near.y + rmax * 2.5] : null;
+  const C = houghCoins(im, rmin, rmax, box), out = [];
+  for (const c of C) {
+    if (anchor && Math.hypot(c.x - anchor.e.cx, c.y - anchor.e.cy) < r0) continue;
+    if (out.some(o => Math.hypot(o.e.cx - c.x, o.e.cy - c.y) < Math.max(o.e.b, c.r))) continue;
+    const e0 = c.el ? { ...c.el } : { cx: c.x, cy: c.y, a: c.r, b: c.r, ang: 0 };
+    if (c.r < rmin * .85) continue; const f = await refineEllipseFull(im, e0, false); if (!f || f.inl < .5 || f.rms > 1.2) continue;
+    if (anchor && Math.abs(f.e.b / f.e.a - anchor.e.b / anchor.e.a) > .15) continue; // must lie on the same tilted plane
+    const kind = coinColour(im, f.e); let e = f.e, fit = f;
+    if (kind === "bim") { const g = await refineEllipseFull(im, e, true); if (g) { e = g.e; fit = g; } }
+    out.push({ e, fit, kind });
+    if (near) break;
+  }
+  // type each coin: colour first, then size relative to the anchor (or the selected coin type)
+  const refD = anchor ? SET.coins[anchor.type] / anchor.e.a : null;
+  for (const c of out) {
+    if (c.kind === "bim") c.type = "coin10"; else if (c.kind === "gold") c.type = "coin2";
+    else if (refD) { const D = c.e.a * refD; c.type = Math.abs(D - SET.coins.coin1) < Math.abs(D - SET.coins.coin5) ? "coin1" : "coin5"; c.sizeAmb = Math.abs(Math.abs(D - SET.coins.coin1) - Math.abs(D - SET.coins.coin5)) < 1; }
+  }
+  if (!refD) { // no anchor: use a coloured coin as the size anchor if any, else assume the selected type
+    const a = out.find(c => c.type === "coin10" || c.type === "coin2"), rd = a ? SET.coins[a.type] / a.e.a : null;
+    for (const c of out) if (!c.type) { if (rd) { const D = c.e.a * rd; c.type = Math.abs(D - SET.coins.coin1) < Math.abs(D - SET.coins.coin5) ? "coin1" : "coin5"; } else c.type = REF[SET.refType] && REF[SET.refType].coin && SET.refType !== "coin10" && SET.refType !== "coin2" ? SET.refType : "coin1"; }
+  }
+  return out;
+}
+async function autoCoinsImage(im) {
+  const def = refDef(); if (!def.coin) return 0;
+  let anchor = null; if (im.refPts.length >= 5) { const e = fitEllipse(im.refPts); if (e) anchor = { type: SET.refType, e }; }
+  const found = await findCoins(im, anchor, null); im.extraCoins = [];
+  if (!anchor) { if (!found.length) return 0; const main = found.find(c => c.type === SET.refType) || found[0]; im.refPts = [0, 1, 2, 3, 4].map(i => ({ ...ellPt(main.e, i * 2 * Math.PI / 5), snapped: "full" })); im.refFit = main.fit; im.mainCoinType = main.type; found.splice(found.indexOf(main), 1); }
+  for (const c of found) im.extraCoins.push({ type: c.type, e: c.e, fit: c.fit, amb: c.sizeAmb });
+  return found.length + (anchor ? 1 : 1);
+}
+
 /* ======================= references ======================= */
 const REF = {
   nail: { need: 2, max: 4, kind: "line", name: () => `เล็บนิ้วโป้ง ${fmt(SET.nail.w, 2)} ± ${fmt(SET.nail.sd, 2)} มม.`, auto: "แตะที่เล็บ 1 ครั้ง ระบบหาความกว้าง โคนเล็บ และขอบเนื้อปลายให้" },
@@ -485,7 +560,7 @@ async function autoRef(im, tap) {
   const seg = await segment(im, [tap], [], 26, "best"); if (!seg || seg.area < 100) return false;
   if (d.kind === "rect") { const q = quadFromMask(im, seg.mask); if (!q) return false; im.refPts = q; }
   else {
-    let e = ellipseFromMask(im, seg.mask); if (!e) return false; im.refFit = null;
+    let e = ellipseFromMask(im, seg.mask); if (!e) return false; im.refFit = null; im.mainCoinType = null; im.extraCoins = [];
     const r = d.coin || SET.refType === "circle" ? await refineEllipseFull(im, e, SET.refType === "coin10") : null;
     if (r) { e = r.e; im.refFit = r; }
     im.refPts = [0, 1, 2, 3, 4].map(i => ({ ...ellPt(e, i * 2 * Math.PI / 5), snapped: r ? "full" : "auto" }));
@@ -736,7 +811,7 @@ function qualityWarnings(im, md) {
 function imgModel(im) {
   if (!im) return null; const def = refDef();
   if (im.refPts.length < def.need) return { err: `ยังไม่มีมาตราวัดในภาพนี้ · ${def.auto}` };
-  let sz = refSize(); const P = im.refPts.slice(0, def.kind === "line" ? 2 : def.need);
+  let sz = refSize(); if (def.coin && im.mainCoinType) sz = { a: SET.coins[im.mainCoinType], sd: SET.coinSd }; const P = im.refPts.slice(0, def.kind === "line" ? 2 : def.need);
   const lens0 = lensInfo(im); const fGuess = lens0.fpx || 26 * Math.hypot(im.W, im.H) / 43.27;
   let M = buildMapper(im, P, sz, { f: fGuess }); if (!M) return { err: "คำนวณจากมาตราวัดไม่ได้ ลองวางใหม่" };
   const cam = cameraModel(im, P, M);
@@ -746,7 +821,7 @@ function imgModel(im) {
   const refPxEff = im.refPts[0].snapped === "full" ? refPx / im.k : refPx;
   let relRef = hyp(sz.sd / sz.a, (im.refPts[0].snapped ? 0.8 : 1.5) * Math.SQRT2 / refPxEff), multi = null;
   if (def.coin && im.extraCoins && im.extraCoins.length) { // several coins: inverse-variance mean of the per-coin scales
-    const k = im.k || 1, L = [{ t: SET.refType, D: sz.a, a: M.ell.a, rms: im.refFit ? im.refFit.rms : 1 }, ...im.extraCoins.map(c => ({ t: c.type, D: SET.coins[c.type], a: c.e.a, rms: c.fit ? c.fit.rms : 1 }))];
+    const k = im.k || 1, L = [{ t: im.mainCoinType || SET.refType, D: sz.a, a: M.ell.a, rms: im.refFit ? im.refFit.rms : 1 }, ...im.extraCoins.map(c => ({ t: c.type, D: SET.coins[c.type], a: c.e.a, rms: c.fit ? c.fit.rms : 1 }))];
     const s0 = sz.a / (2 * L[0].a); let sw = 0, sr = 0; const rs = [];
     for (const c of L) { const r = c.D / (2 * c.a) / s0, rel = hyp(SET.coinSd / c.D, Math.max(.3, c.rms) / (c.a / k) / 2), w = 1 / rel ** 2; c.r = r; c.rel = rel; sw += w; sr += w * r; rs.push(r); }
     const R = sr / sw, spread = sdOf(rs) || 0; multi = { n: L.length, R, spread, list: L };
@@ -1030,10 +1105,11 @@ async function tapAction(im, ip) {
   const t = S.task;
   if (t && t.type === "coin") {
     if (t.img !== im) return; setBusy("กำลัง fit ขอบเหรียญ…"); await new Promise(r => setTimeout(r, 20));
-    const seg = await segment(im, [ip], [], 26, "best"); let e = seg && seg.area > 80 && !seg.touches ? ellipseFromMask(im, seg.mask) : null, fit = null;
-    if (e) { fit = await refineEllipseFull(im, e, t.ctype === "coin10"); if (fit) e = fit.e; }
+    let e = null, fit = null; const me = im.refPts.length >= 5 ? fitEllipse(im.refPts) : null;
+    if (me) { const f = await findCoins(im, { type: SET.refType, e: me }, ip); if (f[0]) { e = f[0].e; fit = f[0].fit; if (t.ctype === "coin10" && f[0].kind !== "bim") { const g = await refineEllipseFull(im, e, true); if (g) { e = g.e; fit = g; } } } }
+    if (!e) { const seg = await segment(im, [ip], [], 26, "best"); e = seg && seg.area > 80 && !seg.touches ? ellipseFromMask(im, seg.mask) : null; if (e) { fit = await refineEllipseFull(im, e, t.ctype === "coin10"); if (fit) e = fit.e; } }
     setBusy(null); if (!e) { $("fsTask").innerHTML = $("task").innerHTML = "<b>หาเหรียญไม่เจอ</b> · แตะกลางเหรียญอีกครั้ง"; return; }
-    (im.extraCoins = im.extraCoins || []).push({ type: t.ctype, e, fit }); setTask(null); renderAll(); return;
+    (im.extraCoins = im.extraCoins || []).push({ type: t.ctype, e, fit }); setTask({ type: "coin", img: im, ctype: $("coinAddType").value }); renderAll(); $("fsTask").innerHTML = $("task").innerHTML = `<b>เพิ่ม ${COIN_NAME[t.ctype]} แล้ว (รวม ${im.extraCoins.length + 1} เหรียญ)</b> · แตะเหรียญถัดไป หรือปิดเต็มจอเมื่อเสร็จ`; return;
   }
   if (t && t.type === "item" && (t.item.tool === "obj" || t.item.tool === "area")) { const it = t.item, tgt = t.side ? it.side : it; if (tgt.imgId === im.id) { if (S.negMode) (tgt.neg = tgt.neg || []).push(ip); else tgt.seeds.push(ip); return runSeg(it, !!t.side); } }
   if (t && t.type === "dolly") { const it = t.item, dl = it.dsrc.dolly; if (dl.imgId !== im.id) return; if (it.tool === "obj") { if (S.negMode) dl.neg.push(ip); else dl.seeds.push(ip); return runDollySeg(it); } if (dl.pts.length < 2) { dl.pts.push(snapPoint(im, ip)); if (dl.pts.length === 2) setTask(null); renderAll(); } return; }
@@ -1106,6 +1182,8 @@ $("refBar").onclick = () => { $("refPanel").hidden = !$("refPanel").hidden; };
 $("refType").onchange = () => { SET.refType = $("refType").value; saveSet(); for (const im of S.imgs) { im.refPts = []; im.refAuto = null; im.extraCoins = []; } const im = curImg(); if (im) setTask({ type: "ref", img: im }); renderAll(); };
 ["refA", "refB", "refS"].forEach(id => $(id).addEventListener("change", () => { const t = SET.refType, a = parseFloat($("refA").value), b = parseFloat($("refB").value), s = parseFloat($("refS").value); if (REF[t] && REF[t].coin) { SET.coins[t] = a || SET.coins[t]; if (s >= 0) SET.coinSd = s; } if (t === "a4" || t === "a4grid") SET.paper = { a: a || 297, b: b || 210 }; if (t === "rect") SET.rect = { a: a || 100, b: b || 100, sd: s >= 0 ? s : .5 }; if (t === "circle") SET.circle = { d: a || 20, sd: s >= 0 ? s : .1 }; if (t === "line") SET.line = { L: a || 100, sd: s >= 0 ? s : .5 }; saveSet(); renderAll(); }));
 $("coinAdd").onclick = () => { const im = curImg(); if (!im || im.refPts.length < 5) { $("task").innerHTML = "วางเหรียญหลักก่อน แล้วค่อยเพิ่มเหรียญ"; return; } setTask({ type: "coin", img: im, ctype: $("coinAddType").value }); openFs(); };
+$("coinAuto").onclick = async () => { const im = curImg(); if (!im) return; setBusy("กำลังหาเหรียญทั้งหมดในภาพ…"); await new Promise(r => setTimeout(r, 30)); const n = await autoCoinsImage(im); setBusy(null); setTask(null); renderAll(); $("task").innerHTML = n ? `<b>พบ ${n} เหรียญ</b> · ${[im.mainCoinType || SET.refType, ...(im.extraCoins || []).map(c => c.type)].map(t => COIN_NAME[t]).join(" + ")}${(im.extraCoins || []).some(c => c.amb) ? " · ⚠ แยก 1฿/5฿ จากขนาดไม่ชัด ตรวจป้ายบนภาพ" : ""}` : "<b>ไม่พบเหรียญ</b> · แตะเหรียญเองด้วยปุ่มหามาตราวัด"; };
+$("coinAutoAll").onclick = async () => { let tot = 0, k = 0; for (const im of S.imgs) { k++; setBusy(`หาเหรียญ ภาพ ${k}/${S.imgs.length}…`); await new Promise(r => setTimeout(r, 30)); tot += await autoCoinsImage(im); } setBusy(null); setTask(null); renderAll(); $("task").innerHTML = `<b>หาเหรียญครบ ${S.imgs.length} ภาพ</b> · รวม ${tot} เหรียญ`; };
 $("coinClear").onclick = () => { const im = curImg(); if (im) { im.extraCoins = []; renderAll(); } };
 $("refPlace").onclick = () => { const im = curImg(); if (im) { im.extraCoins = []; im.refPts = []; im.refAuto = null; setTask({ type: "ref", img: im }); renderAll(); openFs(); } };
 $("refAuto").onclick = async () => { const im = curImg(); if (!im) return; if (SET.refType !== "nail") { setTask({ type: "ref", img: im }); openFs(); return; } setBusy("กำลังหาเล็บอัตโนมัติ…"); const ok = await autoNail(im, null); setBusy(null); if (!ok) { im.refPts = []; setTask({ type: "ref", img: im }); openFs(); } else setTask(null); renderAll(); };
@@ -1250,7 +1328,7 @@ document.querySelectorAll(".tab").forEach(b => b.onclick = () => {
 });
 
 /* ======================= API for mode3d.js ======================= */
-const APP_VERSION = "v9 · 2026-10-14";
+const APP_VERSION = "v10 · 2026-10-14";
 window.addEventListener("load", () => { const v = document.getElementById("appVer"); if (v) v.textContent = APP_VERSION; const b = document.getElementById("forceUpd"); if (b) b.onclick = async () => { b.disabled = true; b.textContent = "กำลังอัปเดต…"; try { const ks = await caches.keys(); await Promise.all(ks.map(k => caches.delete(k))); const rs = await navigator.serviceWorker.getRegistrations(); await Promise.all(rs.map(r => r.unregister())); } catch (e) { } location.reload(); }; });
 window.PC = {
   S, SET, saveSet, fmt, esc, mean, sdOf, rn, hyp, download, makeImg, autoNail, autoRef, refDef, refSize, imgModel, lensInfo, sharpness, TOOLS, SHAPE_N, LIB,

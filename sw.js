@@ -1,6 +1,6 @@
 // Offline support. Network-first for the app's own files so updates arrive immediately;
 // the cache is only a fallback when offline. Bump VERSION when files change.
-const VERSION = "pc-v9";
+const VERSION = "pc-v10";
 const SHELL = ["./", "./index.html", "./app.js", "./manifest.webmanifest", "./icon-192.png", "./icon-512.png", "./mode3d.js", "./hull.js", "./hull-ui.js", "./guide/guide_lie.jpg", "./guide/guide_stand.jpg", "./guide/guide_coin.jpg", "./guide/guide_coins4.jpg", "./colmap/run_colmap.bat", "./colmap/scale_model.py", "./colmap/README.txt"];
 self.addEventListener("install", e => {
   // cache files one by one; a single missing file must never block the update

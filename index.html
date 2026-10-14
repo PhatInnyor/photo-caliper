@@ -169,7 +169,7 @@ canvas.chart{width:100%;height:auto;aspect-ratio:16/10;display:block}
             <label class="f" id="lS">± (มม.)<input type="number" id="refS" step="0.01"></label>
           </div>
           <p class="muted" id="refHint" style="margin:8px 0"></p>
-          <div class="row" id="coinRow" hidden style="margin-bottom:8px"><select id="coinAddType"><option value="coin1">1 บาท</option><option value="coin2">2 บาท</option><option value="coin5">5 บาท</option><option value="coin10">10 บาท</option></select><button class="btn" id="coinAdd">＋ เพิ่มเหรียญ (เฉลี่ยหลายเหรียญ)</button><button class="chip" id="coinClear">ล้างเหรียญที่เพิ่ม</button></div>
+          <div class="row" id="coinRow" hidden style="margin-bottom:8px"><select id="coinAddType"><option value="coin1">1 บาท</option><option value="coin2">2 บาท</option><option value="coin5">5 บาท</option><option value="coin10">10 บาท</option></select><button class="btn pri" id="coinAuto">หาเหรียญทั้งหมดอัตโนมัติ</button><button class="btn" id="coinAutoAll">ทุกภาพ</button><button class="btn" id="coinAdd">＋ เพิ่มเหรียญ (เฉลี่ยหลายเหรียญ)</button><button class="chip" id="coinClear">ล้างเหรียญที่เพิ่ม</button></div>
           <div class="row"><button class="btn pri" id="refAuto">หามาตราวัดอัตโนมัติ</button><button class="btn" id="refPlace">วางเอง</button><button class="chip" id="gyroPlane" aria-pressed="false" hidden>วัตถุวางบนพื้นราบ (ใช้ไจโร)</button></div>
         </div>
         <div class="viewer" id="viewer" style="margin-top:10px;height:56vh"><canvas id="cv"></canvas><span class="hint" id="viewHint">แตะเพื่อเปิดเต็มจอ</span></div>
