@@ -55,10 +55,11 @@ const store = {
   get(k, d) { try { const v = localStorage.getItem(k); return v ? JSON.parse(v) : d; } catch (e) { return d; } },
   set(k, v) { try { localStorage.setItem(k, JSON.stringify(v)); return true; } catch (e) { return false; } }
 };
-const DEF_SET = { refType: "nail", nail: { w: 12.0, sd: 0.3, len: 8.17, h: 16 }, nailCal: [], myRefs: [], valid: [], rect: { a: 100, b: 100, sd: 0.5 }, circle: { d: 20, sd: 0.1 }, line: { L: 100, sd: 0.5 }, f35app: 27, thumbs: false, libs: { cv: true, sam: true, hands: true } };
+const DEF_SET = { refType: "nail", nail: { w: 12.0, sd: 0.3, len: 8.17, h: 16 }, nailCal: [], myRefs: [], valid: [], rect: { a: 100, b: 100, sd: 0.5 }, circle: { d: 20, sd: 0.1 }, line: { L: 100, sd: 0.5 }, f35app: 27, thumbs: false, libs: { cv: true, sam: true, hands: true }, paper: { a: 297, b: 210 }, coins: { coin1: 20.0, coin5: 24.0, coin10: 26.0 }, coinSd: 0.08 };
 let SET = Object.assign({}, DEF_SET, store.get("pc_set", {}));
 for (const k of ["nail", "libs"]) SET[k] = Object.assign({}, DEF_SET[k], SET[k] || {});
 for (const k of ["nailCal", "myRefs", "valid"]) SET[k] = SET[k] || [];
+for (const k of ["paper", "coins", "coinSd"]) if (SET[k] == null) SET[k] = JSON.parse(JSON.stringify(DEF_SET[k]));
 function saveSet() { store.set("pc_set", SET); }
 
 /* ======================= EXIF ======================= */
@@ -372,11 +373,89 @@ async function autoNail(im, tap) {
   im.refPts = n.pts; await refineNailFull(im); im.refAuto = { engine: seg.engine + (tip ? " + Hands" : ""), mask: seg.mask, iou: seg.iou }; im.refOverlay = null; return true;
 }
 
+/* ======================= paper & coin references ======================= */
+function paperQuad(im, tap) {
+  let hv = {}; try { hv = JSON.parse(localStorage.getItem("pc_hv") || "{}"); } catch (e) { }
+  const grid = SET.refType === "a4grid", cfg = { pw: SET.paper.b, ph: SET.paper.a, sp: +hv.hvSP || 30, mg: +hv.hvMG || 15, noGrid: !grid };
+  const P = window.HV.detectPaper({ W: im.W, H: im.H, px: im.px }, cfg); if (!P || P.err || !P.corners) return null;
+  const c = P.corners.map(p => ({ x: p[0], y: p[1] }));
+  if (tap) { let inside = false; for (let i = 0, j = 3; i < 4; j = i++) { const a = c[i], b = c[j]; if ((a.y > tap.y) !== (b.y > tap.y) && tap.x < (b.x - a.x) * (tap.y - a.y) / (b.y - a.y) + a.x) inside = !inside; } if (!inside) return null; }
+  if (grid && !(P.grid >= 8)) return null;
+  // REF rect expects the long side (a) first: corners are TL,TR(short),BR,BL in portrait -> start at TR so TR->BR is the long side
+  const L = (i, j) => dist(c[i], c[j]), longFirst = P.markOK || (L(1, 2) + L(3, 0)) >= (L(0, 1) + L(2, 3)) ? [1, 2, 3, 0] : [0, 1, 2, 3];
+  im.paperFit = { grid: P.grid, rms: P.rms }; return longFirst.map(i => ({ ...c[i], snapped: "full" }));
+}
+// Direct least-squares ellipse fit (Fitzgibbon; numerically stable form of Halir & Flusser)
+function fitEllipseHF(P) {
+  if (P.length < 6) return null; const mx = mean(P.map(p => p.x)), my = mean(P.map(p => p.y)), sc = Math.sqrt(mean(P.map(p => (p.x - mx) ** 2 + (p.y - my) ** 2))) || 1;
+  const S1 = [[0, 0, 0], [0, 0, 0], [0, 0, 0]], S2 = [[0, 0, 0], [0, 0, 0], [0, 0, 0]], S3 = [[0, 0, 0], [0, 0, 0], [0, 0, 0]];
+  for (const p0 of P) { const x = (p0.x - mx) / sc, y = (p0.y - my) / sc, d1 = [x * x, x * y, y * y], d2 = [x, y, 1]; for (let i = 0; i < 3; i++) for (let j = 0; j < 3; j++) { S1[i][j] += d1[i] * d1[j]; S2[i][j] += d1[i] * d2[j]; S3[i][j] += d2[i] * d2[j]; } }
+  const inv = m => { const [[a, b, c], [d, e, f], [g, h, i]] = m, A = e * i - f * h, B = f * g - d * i, C = d * h - e * g, D = a * A + b * B + c * C; if (Math.abs(D) < 1e-15) return null; return [[A / D, (c * h - b * i) / D, (b * f - c * e) / D], [B / D, (a * i - c * g) / D, (c * d - a * f) / D], [C / D, (b * g - a * h) / D, (a * e - b * d) / D]]; };
+  const mm = (A, B) => A.map(r => B[0].map((_, j) => r.reduce((s, v, k) => s + v * B[k][j], 0))), tr = A => A[0].map((_, j) => A.map(r => r[j]));
+  const S3i = inv(S3); if (!S3i) return null; const T = mm(S3i, tr(S2)).map(r => r.map(v => -v)), M0 = mm(S2, T).map((r, i) => r.map((v, j) => v + S1[i][j]));
+  const M = [M0[2].map(v => v / 2), M0[1].map(v => -v), M0[0].map(v => v / 2)];
+  // eigen-decomposition of 3x3 via characteristic cubic
+  const a2 = -(M[0][0] + M[1][1] + M[2][2]), a1 = M[0][0] * M[1][1] - M[0][1] * M[1][0] + M[0][0] * M[2][2] - M[0][2] * M[2][0] + M[1][1] * M[2][2] - M[1][2] * M[2][1];
+  const a0 = -(M[0][0] * (M[1][1] * M[2][2] - M[1][2] * M[2][1]) - M[0][1] * (M[1][0] * M[2][2] - M[1][2] * M[2][0]) + M[0][2] * (M[1][0] * M[2][1] - M[1][1] * M[2][0]));
+  const roots = []; { const p = a1 - a2 * a2 / 3, q = 2 * a2 ** 3 / 27 - a2 * a1 / 3 + a0, D = (q / 2) ** 2 + (p / 3) ** 3; if (D > 1e-14) { const u = Math.cbrt(-q / 2 + Math.sqrt(D)), v = Math.cbrt(-q / 2 - Math.sqrt(D)); roots.push(u + v - a2 / 3); } else { const r = Math.sqrt(Math.max(1e-30, -((p / 3) ** 3))), ph = Math.acos(clamp(-q / 2 / r, -1, 1)), m = 2 * Math.cbrt(r); for (let k = 0; k < 3; k++) roots.push(m * Math.cos((ph + 2 * Math.PI * k) / 3) - a2 / 3); } }
+  let best = null;
+  for (const l of roots) {
+    const R = M.map((r, i) => r.map((v, j) => v - (i === j ? l : 0))), cr = (u, w) => [u[1] * w[2] - u[2] * w[1], u[2] * w[0] - u[0] * w[2], u[0] * w[1] - u[1] * w[0]];
+    const cands = [cr(R[0], R[1]), cr(R[0], R[2]), cr(R[1], R[2])]; const v = cands.reduce((a, b) => Math.hypot(...b) > Math.hypot(...a) ? b : a);
+    if (4 * v[0] * v[2] - v[1] * v[1] > 0) { best = v; break; }
+  }
+  if (!best) return null; const a = best, b = T.map(r => r[0] * a[0] + r[1] * a[1] + r[2] * a[2]);
+  return conicToEll([a[0], a[1], a[2], b[0], b[1], b[2]], mx, my, sc);
+}
+function conicToEll(c, mx, my, sc) {
+  const [A, B, C, D, E, F] = c, det = 4 * A * C - B * B; if (det <= 0) return null;
+  const x0 = (B * E - 2 * C * D) / det, y0 = (B * D - 2 * A * E) / det, F0 = A * x0 * x0 + B * x0 * y0 + C * y0 * y0 + D * x0 + E * y0 + F;
+  let ang = .5 * Math.atan2(B, A - C); const ev = t => A * Math.cos(t) ** 2 + B * Math.cos(t) * Math.sin(t) + C * Math.sin(t) ** 2, e1 = ev(ang), e2 = ev(ang + Math.PI / 2);
+  if (-F0 / e1 <= 0 || -F0 / e2 <= 0) return null; let ra = Math.sqrt(-F0 / e1), rb = Math.sqrt(-F0 / e2); if (rb > ra) { [ra, rb] = [rb, ra]; ang += Math.PI / 2; }
+  return { cx: mx + x0 * sc, cy: my + y0 * sc, a: ra * sc, b: rb * sc, ang };
+}
+// geometric distance of a point to an ellipse (Newton on the angle parameter)
+function ellDist(e, p) { const c = Math.cos(e.ang), s = Math.sin(e.ang), x = (p.x - e.cx) * c + (p.y - e.cy) * s, y = -(p.x - e.cx) * s + (p.y - e.cy) * c; let t = Math.atan2(y * e.a, x * e.b); for (let k = 0; k < 6; k++) { const ct = Math.cos(t), st = Math.sin(t), fx = e.a * ct - x, fy = e.b * st - y, g = -fx * e.a * st + fy * e.b * ct, h = (e.a * st) ** 2 + (e.b * ct) ** 2 - fx * e.a * ct - fy * e.b * st; t -= g / (h || 1); } return Math.hypot(e.a * Math.cos(t) - x, e.b * Math.sin(t) - y); }
+// radial sub-pixel edge search on the ORIGINAL photo, then RANSAC + direct LS ellipse fit
+async function refineEllipseFull(im, e0, outer) {
+  try {
+    const src = im.fullBlob || im.file, k = src && im.k < .999 ? im.k : 1; let get;
+    const eO = { cx: e0.cx / k, cy: e0.cy / k, a: e0.a / k, b: e0.b / k, ang: e0.ang }, R = eO.a * (outer ? 1.6 : 1.25) + 8;
+    const x0 = Math.max(0, Math.floor(eO.cx - R)), y0 = Math.max(0, Math.floor(eO.cy - R));
+    if (k < 1) { if (!im.fullBmp) im.fullBmp = await createImageBitmap(src); const x1 = Math.min(im.fullBmp.width, Math.ceil(eO.cx + R)), y1 = Math.min(im.fullBmp.height, Math.ceil(eO.cy + R)), cw = x1 - x0, ch = y1 - y0; const cv = document.createElement("canvas"); cv.width = cw; cv.height = ch; const cx = cv.getContext("2d", { willReadFrequently: true }); cx.drawImage(im.fullBmp, x0, y0, cw, ch, 0, 0, cw, ch); const d = cx.getImageData(0, 0, cw, ch).data; get = (x, y) => { const xi = clamp(Math.round(x - x0), 0, cw - 1), yi = clamp(Math.round(y - y0), 0, ch - 1); return ycc(d, yi * cw + xi); }; }
+    else get = (x, y) => ycc(im.px, clamp(Math.round(y), 0, im.H - 1) * im.W + clamp(Math.round(x), 0, im.W - 1));
+    const pts = [], N = 240;
+    for (let i = 0; i < N; i++) {
+      const t = i / N * 2 * Math.PI, p = ellPt(eO, t), dx = p.x - eO.cx, dy = p.y - eO.cy, r = Math.hypot(dx, dy), ux = dx / r, uy = dy / r;
+      const lo = outer ? -.25 * r : -.15 * r, hi = outer ? .7 * r : .15 * r, g = [];
+      for (let s = lo; s <= hi; s += .5) { const a = get(p.x + ux * (s - .5), p.y + uy * (s - .5)), b = get(p.x + ux * (s + .5), p.y + uy * (s + .5)); g.push([s, .5 * Math.abs(a[0] - b[0]) + Math.abs(a[1] - b[1]) + Math.abs(a[2] - b[2])]); }
+      const mx = Math.max(...g.map(v => v[1])); if (mx < 12) continue;
+      let j = -1; if (outer) { for (let q = g.length - 2; q > 0; q--) if (g[q][1] >= mx * .5 && g[q][1] >= g[q - 1][1] && g[q][1] >= g[q + 1][1]) { j = q; break; } } else j = g.findIndex(v => v[1] === mx);
+      if (j <= 0 || j >= g.length - 1) continue; const A = g[j - 1][1], B = g[j][1], C = g[j + 1][1], den = A - 2 * B + C, off = den < 0 ? clamp(.5 * (A - C) / den, -.5, .5) * .5 : 0;
+      pts.push({ x: p.x + ux * (g[j][0] + off), y: p.y + uy * (g[j][0] + off) });
+    }
+    if (pts.length < 40) return null;
+    let best = null, bestIn = [];
+    for (let it = 0; it < 120; it++) {
+      const smp = []; for (let q = 0; q < 6; q++) smp.push(pts[(Math.random() * pts.length) | 0]); const e = fitEllipseHF(smp); if (!e || e.a > eO.a * 2.2 || e.b < eO.b * .3) continue;
+      const inl = pts.filter(p => ellDist(e, p) < 1.2); if (inl.length > bestIn.length) { bestIn = inl; best = e; }
+    }
+    if (!best || bestIn.length < pts.length * .5) return null;
+    let e = fitEllipseHF(bestIn) || best; const inl = pts.filter(p => ellDist(e, p) < 1.2); e = fitEllipseHF(inl) || e;
+    const rms = Math.sqrt(mean(inl.map(p => ellDist(e, p) ** 2)));
+    return { e: { cx: e.cx * k, cy: e.cy * k, a: e.a * k, b: e.b * k, ang: e.ang }, rms, inl: inl.length / N, tilt: Math.acos(clamp(e.b / e.a, 0, 1)) * 180 / Math.PI, aPx: e.a };
+  } catch (err) { console.warn("refineEllipseFull", err); return null; }
+}
+
 /* ======================= references ======================= */
 const REF = {
   nail: { need: 2, max: 4, kind: "line", name: () => `เล็บนิ้วโป้ง ${fmt(SET.nail.w, 2)} ± ${fmt(SET.nail.sd, 2)} มม.`, auto: "แตะที่เล็บ 1 ครั้ง ระบบหาความกว้าง โคนเล็บ และขอบเนื้อปลายให้" },
   card: { need: 4, kind: "rect", a: 85.60, b: 53.98, sd: 0.05, name: () => "บัตร ID-1 85.60 × 53.98 มม.", auto: "แตะกลางบัตร 1 ครั้ง ระบบหามุมทั้ง 4" },
-  a4: { need: 4, kind: "rect", a: 297, b: 210, sd: 0.5, name: () => "กระดาษ A4 297 × 210 มม.", auto: "แตะกลางกระดาษ 1 ครั้ง ระบบหามุมทั้ง 4" },
+  a4grid: { need: 4, kind: "rect", a: 297, b: 210, sd: 0.3, name: () => `A4 ลายตาราง ${fmt(SET.paper.a, 1)} × ${fmt(SET.paper.b, 1)} มม.`, auto: "แตะบนกระดาษ 1 ครั้ง ระบบหาขอบกระดาษและเส้นตารางละเอียดกว่าพิกเซล" },
+  coin1: { need: 5, kind: "circle", coin: true, name: () => `เหรียญ 1 บาท ⌀ ${fmt(SET.coins.coin1, 2)} มม.`, auto: "แตะกลางเหรียญ 1 ครั้ง ระบบหาขอบละเอียดกว่าพิกเซลบนภาพต้นฉบับแล้ว fit วงรี" },
+  coin5: { need: 5, kind: "circle", coin: true, name: () => `เหรียญ 5 บาท ⌀ ${fmt(SET.coins.coin5, 2)} มม.`, auto: "แตะกลางเหรียญ 1 ครั้ง ระบบหาขอบละเอียดกว่าพิกเซลบนภาพต้นฉบับแล้ว fit วงรี" },
+  coin10: { need: 5, kind: "circle", coin: true, name: () => `เหรียญ 10 บาท ⌀ ${fmt(SET.coins.coin10, 2)} มม.`, auto: "แตะที่วงนอกสีเงินของเหรียญ 1 ครั้ง ระบบใช้ขอบนอกสุด (ไม่ใช่วงในสีทอง)" },
+  a4: { need: 4, kind: "rect", a: 297, b: 210, sd: 0.5, name: () => `A4 เปล่า ${fmt(SET.paper.a, 1)} × ${fmt(SET.paper.b, 1)} มม.`, auto: "แตะกลางกระดาษ 1 ครั้ง ระบบหามุมทั้ง 4" },
   rect: { need: 4, kind: "rect", name: () => `สี่เหลี่ยม ${fmt(SET.rect.a, 1)} × ${fmt(SET.rect.b, 1)} มม.`, auto: "แตะกลางสี่เหลี่ยม 1 ครั้ง ขอบแรกคือด้านยาว" },
   circle: { need: 5, kind: "circle", name: () => `วงกลม ⌀ ${fmt(SET.circle.d, 2)} มม.`, auto: "แตะกลางวงกลม 1 ครั้ง ระบบ fit วงรีกับขอบทั้งเส้น" },
   line: { need: 2, kind: "line", name: () => `ระยะ ${fmt(SET.line.L, 1)} มม.`, auto: "แตะปลายทั้งสองของระยะที่รู้ (ดูดเข้าขีด)" }
@@ -390,17 +469,25 @@ function refDef(t = SET.refType) {
 function refSize(t = SET.refType) {
   const r = myRef(t); if (r) return { a: r.size, sd: r.sd };
   if (t === "nail") return { a: SET.nail.w, sd: SET.nail.sd };
-  if (t === "card" || t === "a4") return { a: REF[t].a, b: REF[t].b, sd: REF[t].sd };
+  if (t === "card") return { a: REF[t].a, b: REF[t].b, sd: REF[t].sd };
+  if (t === "a4" || t === "a4grid") return { a: SET.paper.a, b: SET.paper.b, sd: REF[t].sd };
+  if (REF[t] && REF[t].coin) return { a: SET.coins[t], sd: SET.coinSd };
   if (t === "rect") return { a: SET.rect.a, b: SET.rect.b, sd: SET.rect.sd };
   if (t === "circle") return { a: SET.circle.d, sd: SET.circle.sd };
   return { a: SET.line.L, sd: SET.line.sd };
 }
 async function autoRef(im, tap) {
   const d = refDef(); if (SET.refType === "nail") return autoNail(im, tap);
+  if ((SET.refType === "a4" || SET.refType === "a4grid") && window.HV) { const q = paperQuad(im, tap); if (q) { im.refPts = q; im.refAuto = { engine: SET.refType === "a4grid" ? "ขอบ + เส้นตาราง" : "ขอบกระดาษ" }; im.refOverlay = null; return true; } }
   if (!tap || d.kind === "line") return false;
   const seg = await segment(im, [tap], [], 26, "best"); if (!seg || seg.area < 100) return false;
   if (d.kind === "rect") { const q = quadFromMask(im, seg.mask); if (!q) return false; im.refPts = q; }
-  else { const e = ellipseFromMask(im, seg.mask); if (!e) return false; im.refPts = [0, 1, 2, 3, 4].map(i => ({ ...ellPt(e, i * 2 * Math.PI / 5), snapped: "auto" })); }
+  else {
+    let e = ellipseFromMask(im, seg.mask); if (!e) return false; im.refFit = null;
+    const r = d.coin || SET.refType === "circle" ? await refineEllipseFull(im, e, SET.refType === "coin10") : null;
+    if (r) { e = r.e; im.refFit = r; }
+    im.refPts = [0, 1, 2, 3, 4].map(i => ({ ...ellPt(e, i * 2 * Math.PI / 5), snapped: r ? "full" : "auto" }));
+  }
   im.refAuto = { engine: seg.engine, mask: seg.mask, iou: seg.iou }; im.refOverlay = null; return true;
 }
 
@@ -636,6 +723,9 @@ function qualityWarnings(im, md) {
     else w.push(["ขนาดมาตราวัดในภาพ", `${fmt(ep, 0)} px${full ? " (ภาพต้นฉบับ)" : ""} · คลาดจากการวางจุด ~±${fmt((full ? .8 : 1.5) * Math.SQRT2 / ep * 100, 1)}%`]);
     const r = Math.hypot(md.c0.x - im.W / 2, md.c0.y - im.H / 2) / (Math.hypot(im.W, im.H) / 2); if (r > .7) w.push(["มาตราวัดอยู่ใกล้ขอบภาพ", "เลนส์บิดมากที่ขอบ ควรวางมาตราวัดและวัตถุใกล้กลางภาพ"]);
     if (md.Z < 250) w.push(["ถ่ายใกล้มาก", `ระยะ ~${fmt(md.Z / 10, 0)} ซม. ถ้าวัตถุกับมาตราวัดต่างระยะ 1 ซม. ค่าจะเพี้ยน ${fmt(10 / md.Z * 100, 1)}% ถ่ายไกลขึ้นแล้วซูมจะช่วยได้`]);
+    if (im.refFit && md.def.kind === "circle") { const f = im.refFit; w.push(["ขอบวงกลม (fit วงรี)", `RMS ${fmt(f.rms, 2)} px · ใช้จุดขอบ ${fmt(f.inl * 100, 0)}% · เอียง ${fmt(f.tilt, 0)}°`]); if (f.tilt > 30) w.push(["เหรียญเอียงมาก", "ผนังข้างเหรียญ (หนา ~1.5 มม.) อาจรวมในขอบ ทำให้แกนยาวเกิน ~0.5–2% ถ่ายตรงลงมามากขึ้น"]); if (f.rms > .6) w.push(["ขอบเหรียญไม่คม", "แสงสะท้อนหรือภาพเบลอ ใช้แสงนุ่มและพื้นสีตัดกับเหรียญ"]); }
+    if (md.def.kind === "circle" && !im.refFit && md.def.coin) w.push(["ไม่ได้ fit ขอบละเอียด", "ใช้ขอบจากการตัดภาพ (หยาบกว่า) · ลองแตะกลางเหรียญอีกครั้ง"]);
+    if (im.paperFit && im.paperFit.grid) w.push(["เส้นตาราง", `ใช้ ${im.paperFit.grid} จุดตัด · RMS ${fmt(im.paperFit.rms, 2)} px`]);
     if (md.check && Math.abs(md.check.ratio - 1) > .12) w.push(["สัดส่วนเล็บไม่ตรงค่าที่ตั้งไว้", `ต่าง ${fmt((md.check.ratio - 1) * 100, 0)}% เล็บอาจเอียงจากหน้ากล้อง หรือค่าเล็บในตั้งค่าคลาด`]);
   }
   return w;
@@ -701,7 +791,7 @@ function evalObj(it, im, md) {
 function taskHtml(t) {
   if (!t) return curImg() ? "เลือกเครื่องมือวัด หรือแตะภาพเพื่อเปิดเต็มจอแล้วลากจุดปรับ" : "ถ่ายภาพหรือเลือกภาพที่มีมาตราวัดอยู่ใกล้วัตถุ";
   if (t.type === "ref") { const d = refDef(), n = t.img.refPts.length; return `<b>มาตราวัด</b> · ${d.auto}${n ? ` (วางแล้ว ${n} จุด ลากปรับได้)` : ""}`; }
-  if (t.type === "item" && (t.item.tool === "obj" || t.item.tool === "area")) { const it = t.item, T = TOOLS[it.tool]; const m = S.msg ? `<div class="warn">${esc(S.msg)}</div>` : ""; S.msg = null; const sam = LIB.sam.state === "ok" ? "" : `<div class="warn">SAM ${({ off: "ปิดอยู่", loading: "กำลังโหลด (~40 MB ครั้งแรก)", fail: "โหลดไม่ได้" })[LIB.sam.state]} — ใช้ตัวแยกแบบสี/ขอบ ซึ่งลามง่ายกับวัตถุใสหรือสีใกล้พื้นหลัง ${LIB.sam.state !== "loading" ? '<button class="chip" onclick="PC.retrySAM()">ลองโหลด SAM ใหม่</button>' : ""}</div>`; return (t.side ? `<b>#${it.id} ภาพด้านข้าง</b> · แตะที่วัตถุเดียวกันในภาพนี้` : `<b>#${it.id} ${T.n}</b> · ${T.hint}`) + m + sam; }
+  if (t.type === "item" && (t.item.tool === "obj" || t.item.tool === "area")) { const it = t.item, T = TOOLS[it.tool]; const m = S.msg ? `<div class="warn">${esc(S.msg)}</div>` : ""; S.msg = null; const mv = it.tool === "obj" ? `<div class="muted">รอบวง/ปริมาตรจากภาพเดียวคลาดได้ ±10–20% · ถ้าต้องการแม่น ใช้แท็บ 3D → วัดจากเงาหลายมุม + A4</div>` : ""; const sam = LIB.sam.state === "ok" ? "" : `<div class="warn">SAM ${({ off: "ปิดอยู่", loading: "กำลังโหลด (~40 MB ครั้งแรก)", fail: "โหลดไม่ได้" })[LIB.sam.state]} — ใช้ตัวแยกแบบสี/ขอบ ซึ่งลามง่ายกับวัตถุใสหรือสีใกล้พื้นหลัง ${LIB.sam.state !== "loading" ? '<button class="chip" onclick="PC.retrySAM()">ลองโหลด SAM ใหม่</button>' : ""}</div>`; return (t.side ? `<b>#${it.id} ภาพด้านข้าง</b> · แตะที่วัตถุเดียวกันในภาพนี้` : `<b>#${it.id} ${T.n}</b> · ${T.hint}`) + m + mv + sam; }
   if (t.type === "item") { const it = t.item, T = TOOLS[it.tool]; return it.tool === "obj" && t.side ? `<b>#${it.id} ภาพด้านข้าง</b> · แตะที่วัตถุเดียวกันในภาพนี้` : `<b>#${it.id} ${T.n}</b> · ${T.hint}`; }
   if (t.type === "dolly") return `<b>#${t.item.id} ถอยกล้อง (ภาพที่ 2)</b> · ${t.item.tool === "obj" ? "แตะที่วัตถุเดียวกัน" : "แตะปลายทั้งสองของสิ่งเดียวกัน"} ในภาพนี้`;
   if (t.type === "contact") return `<b>#${t.item.id} จุดแตะพื้น</b> · แตะจุดที่วัตถุแตะพื้นหรือโต๊ะ (เช่น ขอบล่างของก้นขวดที่หันเข้ากล้อง)`;
@@ -751,11 +841,15 @@ function renderChips() {
   if (S.imgs.length) { const d = document.createElement("button"); d.className = "chip"; d.textContent = "ลบภาพนี้"; d.onclick = () => { const im = curImg(); S.items = S.items.filter(x => x.imgId !== im.id); S.items.forEach(x => { if (x.side && x.side.imgId === im.id) x.side = null; if (x.dsrc && x.dsrc.dolly && x.dsrc.dolly.imgId === im.id) x.dsrc.dolly = null; }); if (im.cvGray) im.cvGray.delete(); S.imgs.splice(S.cur, 1); S.cur = S.imgs.length - 1; setTask(null); renderAll(); }; b.appendChild(d); }
 }
 function renderRefPanel() {
-  const sel = $("refType"); const opts = [["nail", "เล็บนิ้วโป้ง (มาตรฐาน)"], ["card", "บัตร ID-1 (85.60 × 53.98 มม.)"], ["a4", "กระดาษ A4 (297 × 210 มม.)"], ["rect", "สี่เหลี่ยมกำหนดเอง"], ["circle", "วงกลม (เหรียญ ฝา)"], ["line", "ระยะที่รู้ (ไม้บรรทัด)"], ...SET.myRefs.map(r => ["mine:" + r.id, "ของฉัน: " + r.name + " " + fmt(r.size, 2) + " มม."])];
-  sel.innerHTML = opts.map(([v, t]) => `<option value="${esc(v)}">${esc(t)}</option>`).join(""); sel.value = SET.refType; if (sel.value !== SET.refType) { SET.refType = "nail"; sel.value = "nail"; }
+  const sel = $("refType"); const G = [["แนะนำ", [["a4grid", "A4 ลายตาราง (แม่นสุด · ใช้ 3D หลายมุมได้)"], ["a4", "A4 เปล่า"], ["coin1", `เหรียญ 1 บาท (⌀ ${fmt(SET.coins.coin1, 2)})`], ["coin5", `เหรียญ 5 บาท (⌀ ${fmt(SET.coins.coin5, 2)})`], ["coin10", `เหรียญ 10 บาท (⌀ ${fmt(SET.coins.coin10, 2)})`], ["card", "บัตร ATM/ID-1 (85.60 × 53.98)"]]], ["อื่นๆ (กำหนดขนาดเอง)", [["circle", "วงกลม (ฝา ฯลฯ)"], ["rect", "สี่เหลี่ยม"], ["line", "ระยะที่รู้ (ไม้บรรทัด)"]]], ["สำรอง", [["nail", "เล็บนิ้วโป้ง (±3–8%)"]]]];
+  if (SET.myRefs.length) G.push(["ของฉัน", SET.myRefs.map(r => ["mine:" + r.id, r.name + " " + fmt(r.size, 2) + " มม."])]);
+  sel.innerHTML = G.map(([g, L]) => `<optgroup label="${esc(g)}">${L.map(([v, t]) => `<option value="${esc(v)}">${esc(t)}</option>`).join("")}</optgroup>`).join(""); sel.value = SET.refType; if (sel.value !== SET.refType) { SET.refType = "nail"; sel.value = "nail"; }
   const t = SET.refType, d = refDef(); $("refName").textContent = d.name(); const show = (id, v) => $(id).hidden = !v;
-  show("lA", t === "rect" || t === "circle" || t === "line"); show("lB", t === "rect"); show("lS", t === "rect" || t === "circle" || t === "line");
-  $("lA").firstChild.textContent = t === "circle" ? "เส้นผ่านศูนย์กลาง (มม.)" : t === "line" ? "ความยาว (มม.)" : "กว้าง (มม.)";
+  const coin = !!(REF[t] && REF[t].coin), paper = t === "a4" || t === "a4grid";
+  show("lA", t === "rect" || t === "circle" || t === "line" || coin || paper); show("lB", t === "rect" || paper); show("lS", t === "rect" || t === "circle" || t === "line" || coin);
+  $("lA").firstChild.textContent = t === "circle" || coin ? "เส้นผ่านศูนย์กลาง (มม.)" : t === "line" ? "ความยาว (มม.)" : paper ? "ด้านยาวที่วัดจริง (มม.)" : "กว้าง (มม.)";
+  $("lB").firstChild.textContent = paper ? "ด้านสั้นที่วัดจริง (มม.)" : "สูง (มม.)";
+  if (coin) { $("refA").value = SET.coins[t]; $("refS").value = SET.coinSd; } if (paper) { $("refA").value = SET.paper.a; $("refB").value = SET.paper.b; }
   if (t === "rect") { $("refA").value = SET.rect.a; $("refB").value = SET.rect.b; $("refS").value = SET.rect.sd; } if (t === "circle") { $("refA").value = SET.circle.d; $("refS").value = SET.circle.sd; } if (t === "line") { $("refA").value = SET.line.L; $("refS").value = SET.line.sd; }
   $("refHint").textContent = d.auto + (t === "nail" ? ` · กว้าง ${SET.nail.w} ± ${SET.nail.sd} มม. ยาว ${SET.nail.len} มม. สูงจากพื้น ${SET.nail.h} มม. (แก้ในตั้งค่า)` : "") + (d.mine ? ` · ได้มาจาก ${d.mine.from} (ความคลาดสะสม ±${fmt(d.mine.sd / d.mine.size * 100, 1)}%)` : "");
   const im = curImg(); const g = $("gyroPlane"); g.hidden = !(im && im.gyro && d.kind === "line"); if (im) g.setAttribute("aria-pressed", !!im.gyroPlane);
@@ -990,7 +1084,7 @@ $("tol").onchange = () => { const t = S.task; if (!t || !t.item) return; const i
 })();
 $("refBar").onclick = () => { $("refPanel").hidden = !$("refPanel").hidden; };
 $("refType").onchange = () => { SET.refType = $("refType").value; saveSet(); for (const im of S.imgs) { im.refPts = []; im.refAuto = null; } const im = curImg(); if (im) setTask({ type: "ref", img: im }); renderAll(); };
-["refA", "refB", "refS"].forEach(id => $(id).addEventListener("change", () => { const t = SET.refType, a = parseFloat($("refA").value), b = parseFloat($("refB").value), s = parseFloat($("refS").value); if (t === "rect") SET.rect = { a: a || 100, b: b || 100, sd: s >= 0 ? s : .5 }; if (t === "circle") SET.circle = { d: a || 20, sd: s >= 0 ? s : .1 }; if (t === "line") SET.line = { L: a || 100, sd: s >= 0 ? s : .5 }; saveSet(); renderAll(); }));
+["refA", "refB", "refS"].forEach(id => $(id).addEventListener("change", () => { const t = SET.refType, a = parseFloat($("refA").value), b = parseFloat($("refB").value), s = parseFloat($("refS").value); if (REF[t] && REF[t].coin) { SET.coins[t] = a || SET.coins[t]; if (s >= 0) SET.coinSd = s; } if (t === "a4" || t === "a4grid") SET.paper = { a: a || 297, b: b || 210 }; if (t === "rect") SET.rect = { a: a || 100, b: b || 100, sd: s >= 0 ? s : .5 }; if (t === "circle") SET.circle = { d: a || 20, sd: s >= 0 ? s : .1 }; if (t === "line") SET.line = { L: a || 100, sd: s >= 0 ? s : .5 }; saveSet(); renderAll(); }));
 $("refPlace").onclick = () => { const im = curImg(); if (im) { im.refPts = []; im.refAuto = null; setTask({ type: "ref", img: im }); renderAll(); openFs(); } };
 $("refAuto").onclick = async () => { const im = curImg(); if (!im) return; if (SET.refType !== "nail") { setTask({ type: "ref", img: im }); openFs(); return; } setBusy("กำลังหาเล็บอัตโนมัติ…"); const ok = await autoNail(im, null); setBusy(null); if (!ok) { im.refPts = []; setTask({ type: "ref", img: im }); openFs(); } else setTask(null); renderAll(); };
 $("gyroPlane").onclick = () => { const im = curImg(); if (im) { im.gyroPlane = !im.gyroPlane; renderAll(); } };

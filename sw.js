@@ -1,6 +1,6 @@
 // Offline cache for the app shell. Bump VERSION whenever any file changes.
-const VERSION = "pc-v5";
-const SHELL = ["./", "./index.html", "./app.js", "./manifest.webmanifest", "./icon-192.png", "./icon-512.png","./mode3d.js","./hull.js","./hull-ui.js","./colmap/run_colmap.bat","./colmap/scale_model.py","./colmap/README.txt"];
+const VERSION = "pc-v6";
+const SHELL = ["./", "./index.html", "./app.js", "./manifest.webmanifest", "./icon-192.png", "./icon-512.png","./mode3d.js","./hull.js","./hull-ui.js","./guide/guide_lie.jpg","./guide/guide_stand.jpg","./guide/guide_coin.jpg","./colmap/run_colmap.bat","./colmap/scale_model.py","./colmap/README.txt"];
 self.addEventListener("install", e => { e.waitUntil(caches.open(VERSION).then(c => c.addAll(SHELL)).then(() => self.skipWaiting())); });
 self.addEventListener("activate", e => { e.waitUntil(caches.keys().then(ks => Promise.all(ks.filter(k => k !== VERSION).map(k => caches.delete(k)))).then(() => self.clients.claim())); });
 self.addEventListener("fetch", e => {

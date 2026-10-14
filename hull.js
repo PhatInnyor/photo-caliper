@@ -106,7 +106,7 @@
     for (let i = 0; i < nx; i++) for (let j = 0; j < ny; j++) G.push([cfg.mg + i * cfg.sp, cfg.mg + j * cfg.sp]);
     const pxmm = Hm => { const a = applyH(Hm, PW / 2, PH / 2), b = applyH(Hm, PW / 2 + 1, PH / 2), d = applyH(Hm, PW / 2, PH / 2 + 1); return (Math.hypot(b[0] - a[0], b[1] - a[1]) + Math.hypot(d[0] - a[0], d[1] - a[1])) / 2; };
     let found = [], rms = NaN;
-    for (const frac of [.15, .08, .04]) {
+    for (const frac of cfg.noGrid ? [] : [.15, .08, .04]) {
       const ppm = pxmm(Hm), R = Math.max(2, Math.round(frac * cfg.sp * ppm)); found = [];
       for (const g of G) {
         const p = applyH(Hm, g[0], g[1]), ex = applyH(Hm, g[0] + 1, g[1]), ey = applyH(Hm, g[0], g[1] + 1);

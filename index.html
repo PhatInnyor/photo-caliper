@@ -160,7 +160,7 @@ canvas.chart{width:100%;height:auto;aspect-ratio:16/10;display:block}
           <span class="btn filebtn">เลือกภาพในเครื่อง<input type="file" id="fileIn" accept="image/*" multiple></span>
         </div>
         <div class="row" id="imgChips" style="margin-top:10px"></div>
-        <button class="refbar" id="refBar" style="margin-top:10px"><span>[วัตถุมาตราวัด] <b id="refName">…</b></span><span>&gt;&gt;</span></button>
+        <button class="refbar" id="refBar" style="margin-top:10px"><span>[ทาบวัดด้วย] <b id="refName">…</b></span><span>&gt;&gt;</span></button>
         <div class="panel" id="refPanel" hidden style="margin-top:8px;background:var(--sunk)">
           <div class="fgrid">
             <label class="f">ชนิด<select id="refType"></select></label>
@@ -214,6 +214,7 @@ canvas.chart{width:100%;height:auto;aspect-ratio:16/10;display:block}
           <button class="chip" id="hvClear">ล้าง</button>
         </div>
         <div class="fgrid" style="margin-top:8px">
+          <label class="f">แผ่นอ้างอิง<select id="hvSheet"><option value="grid">A4 ลายตาราง</option><option value="blank">A4 เปล่า + สี่เหลี่ยมทึบที่มุม</option></select></label>
           <label class="f">ท่าวาง<select id="hvMode"><option value="lie">นอนบนกระดาษ</option><option value="stand">ตั้งบนฐาน</option></select></label>
           <label class="f">กว้างกระดาษจริง (มม.)<input type="number" id="hvPW" step="0.1" value="210"></label>
           <label class="f">ยาวกระดาษจริง (มม.)<input type="number" id="hvPH" step="0.1" value="297"></label>
@@ -222,6 +223,7 @@ canvas.chart{width:100%;height:auto;aspect-ratio:16/10;display:block}
           <label class="f">ความไวแยกวัตถุ <span id="hvTolV">18</span><input type="range" id="hvTol" min="6" max="60" value="18"></label>
         </div>
         <label class="row" style="margin-top:6px;gap:6px"><input type="checkbox" id="hvAllow"> ยอมให้เงาพลาดได้ 1 ภาพ (ใช้เมื่อมีภาพที่แยกวัตถุไม่ดี · ค่าจะเกินจริงขึ้นเล็กน้อย)</label>
+        <p class="muted" style="margin:6px 0">ตัวอย่างการถ่าย: <a href="guide/guide_lie.jpg" target="_blank">ท่านอน</a> · <a href="guide/guide_stand.jpg" target="_blank">ท่าตั้ง</a> · <a href="guide/guide_coin.jpg" target="_blank">เหรียญภาพเดียว</a></p>
         <p class="muted" id="hvStatus" style="margin:8px 0">มุมซ้ายบนของกระดาษต้องมีสี่เหลี่ยมทึบ · เห็นกระดาษครบ 4 มุมทุกภาพ · พื้นหลังสีเข้ม · แตะภาพย่อเพื่อไม่ใช้ภาพนั้น</p>
         <div class="thumbs" id="hvThumbs"></div>
         <div id="hvOut" style="margin-top:10px"></div>
